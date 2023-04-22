@@ -1,0 +1,29 @@
+{
+	"name": "dragonbot",
+	"version": "2.0.0",
+	"description": "A general purpose moderation bot built for Drexel University Discord community.",
+	"main": "index.js",
+	"scripts": {
+		"start": "node index.js"
+	},
+	"keywords": [
+		"discord",
+		"bot",
+		"drexel",
+    "dragonbot",
+    "firebase",
+    "sendgrid"
+	],
+	"author": "Kevin Wong",
+	"license": "MIT",
+	"dependencies": {
+		"@sendgrid/mail": "^7.7.0",
+		"axios": "^1.3.5",
+		"discord.js": "^14.9.0",
+		"dotenv": "^16.0.3",
+		"firebase-admin": "^11.5.0",
+		"nanoid": "^2.1.11",
+		"npm": "^9.6.3",
+		"request": "^2.88.2"
+	}
+}

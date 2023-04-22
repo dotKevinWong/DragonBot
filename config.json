@@ -1,0 +1,16 @@
+{
+	"FROM_EMAIL": "noreply@drexeldiscord.com",
+	"EMAIL_SUBJECT": "Verify your account with the Drexel Discord network",
+	"ACTIVITY_TYPE": "",
+	"ACTIVITY_TEXT": "",
+	"STREAM_URL": "",
+  	"MOD_NOTES_CHANNEL_ID": "611710233110380574",
+	"OFFTOPIC_IMAGE_ARRAY": [
+		"https://i.imgur.com/oJCeden.gif",
+		"https://i.imgur.com/A6AoUYI.gif",
+		"https://i.imgur.com/82FuJgL.gif",
+		"https://i.imgur.com/Hf7gnSt.gif",
+		"https://i.imgur.com/LrBO86i.gif"
+	],
+	"OFFTOPIC_DESCRIPTION": "Please move off topic conversation to [#lounge](https://discordapp.com/channels/323942271550750720/493532569657278476) or appropriate channel"
+}
