@@ -22,7 +22,7 @@
 		"discord.js": "^14.9.0",
 		"dotenv": "^16.0.3",
 		"firebase-admin": "^11.5.0",
-		"nanoid": "^2.1.11",
+		"nanoid": "^5.0.2",
 		"npm": "^9.6.3",
 		"request": "^2.88.2"
 	}
