@@ -10,9 +10,9 @@
 		"discord",
 		"bot",
 		"drexel",
-    "dragonbot",
-    "firebase",
-    "sendgrid"
+		"dragonbot",
+		"firebase",
+		"sendgrid"
 	],
 	"author": "Kevin Wong",
 	"license": "MIT",
@@ -24,6 +24,7 @@
 		"firebase-admin": "^11.5.0",
 		"nanoid": "^2.1.11",
 		"npm": "^9.6.3",
+		"openai": "^3.2.1",
 		"request": "^2.88.2"
 	}
 }

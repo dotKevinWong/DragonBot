@@ -1,6 +1,11 @@
 const { EmbedBuilder, PermissionFlagsBits } = require("discord.js");
 const { SlashCommandBuilder } = require("@discordjs/builders");
 
+/* Mod Commands 
+- Talk - Send an announcment to the channel
+- React - React to a message
+*/
+
 module.exports = {
 	data: new SlashCommandBuilder()
 		.setName("mod")

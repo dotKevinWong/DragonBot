@@ -16,15 +16,26 @@ const client = new Client({
 		GatewayIntentBits.GuildMessages,
 		GatewayIntentBits.MessageContent,
 		GatewayIntentBits.GuildModeration,
+		GatewayIntentBits.GuildMessageReactions,
+		GatewayIntentBits.GuildVoiceStates,
 	],
 });
 const admin = require("firebase-admin");
 
+// Discord API Initialization
 const fs = require("fs");
 const commandFiles = fs
 	.readdirSync("./commands")
 	.filter((file) => file.endsWith(".js"));
 const serviceAccount = require("./serviceKey.json");
+const messageDelete = require("./components/messageDelete");
+const messageUpdate = require("./components/messageUpdate");
+const guildBanAdd = require("./components/guildBanAdd");
+const guildMemberRemove = require("./components/guildMemberRemove");
+const guildMemberAdd = require("./components/guildMemberAdd");
+const guildMemberUpdate = require("./components/guildMemberUpdate");
+const voiceStateUpdate = require("./components/voiceStateUpdate");
+const messageCreate = require("./components/messageCreate");
 
 const secrets =
 	process.env.DISCORD_API_TOKEN == undefined ? require("./.env") : process.env;
@@ -73,150 +84,61 @@ client.on("ready", () => {
 	console.log(`Logged in as ${client.user.tag}!`);
 });
 
+/*
+Logging
+ONLY ENABLED FOR DREXEL DISCORD	SERVER
+*/
+
 client.on("guildMemberAdd", async (member) => {
-	try {
-		// Get user data
-		const userDoc = client.db.collection("users").doc(member.id);
-		const userRef = await userDoc.get();
-		const userData = await userRef.data();
-		// Get guild data
-		const guildDoc = client.db.collection("guilds").doc(member.guild.id);
-		const guildRef = await guildDoc.get();
-		const guildData = await guildRef.data();
-
-		// Create user document if it doesn't exist
-		if (!userRef.exists) {
-			await userDoc.set({
-				discord_id: member.id,
-				is_profile_disabled: false,
-			});
-		}
-		// Send welcome message if enabled
-		if (guildData.is_welcome_enabled === true) {
-			try {
-				const channel = member.guild.channels.cache.get(
-					guildData.welcome_channel_id
-				);
-				if (!channel) return;
-				channel
-					.send(guildData.welcome_message.replace("{member}", member))
-					.catch((e) => console.log(e));
-			} catch (e) {
-				console.log(e);
-			}
-		}
-		// Send DM welcome message if enabled
-		if (guildData.is_dm_welcome_enabled === true) {
-			try {
-				const welcomeMessage = guildData.dm_welcome_message.replace(
-					/\\n/g,
-					"\n"
-				);
-				member.send(welcomeMessage).catch((e) => console.log(e));
-			} catch (e) {
-				console.log(e);
-			}
-		}
-		if (userRef.exists) {
-			// Verify user if they are verified and sync is enabled
-			if (
-				userData.is_verified === true &&
-				guildData.is_verification_sync_enabled === true
-			) {
-				try {
-					const role = member.guild.roles.cache.get(
-						guildData.verification_role_id
-					);
-					if (!role) return;
-					member.roles.add(role).catch((e) => console.log(e));
-					const verificationEmbed = new EmbedBuilder()
-						.setTitle("✅ Verification Status")
-						.setDescription(
-							`You have been automatically verified in ${member.guild.name}! Thanks to DragonBot, verification status is synced across all Drexel University discord servers.`
-						)
-						.setColor("#00ff00");
-					member
-						.send({ embeds: [verificationEmbed] })
-						.catch((e) => console.log(e));
-				} catch (e) {
-					console.log(e);
-				}
-			}
-		}
-	} catch (error) {
-		console.error(error);
-	}
+	guildMemberAdd(member);
 });
 
-/* 
-BAN SYNCING
-- This feature will sync bans from one server to all other servers that have ban syncing enabled
-*/
+/* Log Kicked Members */
+client.on("guildMemberRemove", async (member) => {
+	guildMemberRemove(member);
+});
 
+/* Log Deleted Messages */
+client.on("messageDelete", async (message) => {
+	messageDelete(message);
+});
+
+/* Log Bulk Deleted Messages */
+client.on("messageDeleteBulk", async (messages) => {
+	messages.forEach((message) => {
+		messageDelete(message);
+	});
+});
+
+/* Log Edited Messages */
+client.on("messageUpdate", async (oldMessage, newMessage) => {
+	messageUpdate(oldMessage, newMessage);
+});
+
+/* Log Role Updates */
+client.on("guildMemberUpdate", async (oldMember, newMember) => {
+	guildMemberUpdate(oldMember, newMember);
+});
+
+/* Log Member Join and Leave on Voice Channels */
+client.on("voiceStateUpdate", async (oldState, newState) => {
+	voiceStateUpdate(oldState, newState);
+});
+
+/* Ban Syncing */
 client.on("guildBanAdd", async (guild) => {
-	const userDoc = client.db.collection("users").doc(guild.user.id);
-	const userRef = await userDoc.get();
-	if (!userRef.exists) {
-		await userDoc.set({
-			discord_id: guild.user.id,
-			is_profile_disabled: false,
-		});
-	}
-	await userDoc.update({
-		is_profile_disabled: true,
-		is_banned: true,
-		ban_guild_id: guild.guild.id,
-		ban_date: new Date(),
-	});
-	const guilds = await client.db.collection("guilds").get();
-	guilds.forEach(async (obj) => {
-		const guildData = await obj.data();
-		if (guildData.is_ban_sync_enabled === true) {
-			console.log(`Banning ${guild.user.id} from ${obj.id}...`);
-			const guild_id = await client.guilds.cache.get(guild.guild.id);
-			if (!guild_id) return;
-			guild_id.members
-				.ban(guild.user.id, {
-					reason: `Banned synced from ${guild.guild.name} (${guild.guild.id})`,
-				})
-				.then((user) => {
-					console.log(`${user} - Banned ${guild.user.id} from ${obj.id}!`);
-				})
-				.catch((e) => {
-					console.log(e);
-				});
-		} else {
-			console.log(`Ban syncing disabled for ${obj.id}`);
-		}
-	});
+	guildBanAdd(guild);
 });
 
-/* 
-FOR DREXEL DISCORD ONLY
-- This feature is badly coded
-- It checks if your introduction is longer than "hi or hello"
-- This could use a re-work
-*/
+/* Introduction Checking */
 client.on("messageCreate", (message) => {
-	try {
-		if (message.guild.id === "323942271550750720") {
-			// Check if "Guild" is Drexel Discord
-			if (message.channel.id === "575488601165529088") {
-				// Check if Message is in "Introductions Channel"
-				if (message.content.length < 7) {
-					message.delete();
-					message.author.createDM().then((dm) => {
-						dm.send("Please give a more detailed introduction.");
-					}).catch((e) => console.log(e));
-				} else {
-					message.member.roles.add("763893629374300190"); // Add "Introduced" role
-				}
-			}
-		}
-	} catch (error) {
-		console.error(error);
-	}
+	messageCreate(message);
 });
+
+/* Command Handling 
+- This is the main command handler
+- It listens for command interactions and executes them from the commands folder
+*/
 
 client.on("interactionCreate", async (interaction) => {
 	if (!interaction.isCommand()) return;
@@ -233,6 +155,11 @@ client.on("interactionCreate", async (interaction) => {
 	}
 });
 
+/* Modal Handling
+- This is the main modal handler
+- It listens for modal interactions and executes them based on the modal customId
+TODO: Create Guild Collection and Handle Modals via Folder
+*/
 client.on(Events.InteractionCreate, async (interaction) => {
 	if (!interaction.isModalSubmit()) return;
 	if (interaction.customId === "dm-message-modal") {
@@ -270,6 +197,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
 	}
 });
 
+/* Guild Join
+- This is the guild join handler
+- It creates a new document in the guilds collection when the bot joins a new server
+*/
 client.on("guildCreate", (guild) => {
 	console.log("Guild Joined: " + guild.name);
 	client.db.collection("guilds").doc(guild.id).set({
@@ -284,6 +215,11 @@ client.on("guildCreate", (guild) => {
 		dm_welcome_message: "",
 	});
 });
+
+/* Guild Leave
+- This is the guild leave handler
+- At the moment, it only logs when the bot leaves a server
+*/
 client.on("guildDelete", (guild) => {
 	console.log("Guild Left: " + guild.name);
 });
