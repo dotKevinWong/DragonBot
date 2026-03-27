@@ -1,0 +1,39 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+.next/
+out/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Turbo
+.turbo/
+
+# Vercel
+.vercel/
+
+# Logs
+*.log
+
+# Project docs / Claude
+PROJECT-PLAN.md
+CLAUDE.md
+.claude/
+/scripts
+
+# Lock files are kept (pnpm-lock.yaml)

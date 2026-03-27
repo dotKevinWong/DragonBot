@@ -1,0 +1,30 @@
+{
+  "name": "bot",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "echo 'bot build complete'",
+    "start": "tsx src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@dragonbot/db": "workspace:*",
+    "discord.js": "^14.18.0",
+    "dotenv": "^17.3.1",
+    "drizzle-orm": "^0.44.0",
+    "node-cron": "^4.2.1",
+    "openai": "^4.85.0",
+    "pino": "^9.6.0",
+    "resend": "^4.1.0",
+    "tsx": "^4.19.0",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/node-cron": "^3.0.11",
+    "typescript": "^5.8.2",
+    "vitest": "^3.0.0"
+  }
+}
