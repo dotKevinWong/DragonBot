@@ -10,11 +10,9 @@ const command: BotCommand = {
 
   async execute(interaction: ChatInputCommandInteraction, ctx: BotContext) {
     if (!interaction.guildId) {
-      await interaction.reply({ embeds: [errorEmbed("This command can only be used in a server.")], ephemeral: true });
+      await interaction.editReply({ embeds: [errorEmbed("This command can only be used in a server.")] });
       return;
     }
-
-    await interaction.deferReply();
 
     try {
       const res = await fetch(

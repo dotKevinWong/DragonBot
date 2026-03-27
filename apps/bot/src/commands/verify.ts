@@ -9,6 +9,7 @@ import { AppError } from "../types/errors.js";
 import { successEmbed, errorEmbed } from "../utils/embeds.js";
 
 const command: BotCommand = {
+  ephemeral: true,
   data: new SlashCommandBuilder()
     .setName("verify")
     .setDescription("Email verification commands")
@@ -34,7 +35,7 @@ const command: BotCommand = {
 
   async execute(interaction: ChatInputCommandInteraction, ctx: BotContext) {
     if (!interaction.guildId) {
-      await interaction.reply({ embeds: [errorEmbed("This command can only be used in a server.")], ephemeral: true });
+      await interaction.editReply({ embeds: [errorEmbed("This command can only be used in a server.")] });
       return;
     }
 
@@ -50,9 +51,8 @@ const command: BotCommand = {
           email,
         );
         log.info({ email }, "Verification initiated");
-        await interaction.reply({
+        await interaction.editReply({
           embeds: [successEmbed("Verification email sent! Check your inbox and use `/verify code` to complete verification.")],
-          ephemeral: true,
         });
       } else if (sub === "code") {
         const code = interaction.options.getString("code", true);
@@ -74,16 +74,14 @@ const command: BotCommand = {
         }
 
         log.info({ email: result.email }, "Verification confirmed");
-        await interaction.reply({
+        await interaction.editReply({
           embeds: [successEmbed("You have been verified!")],
-          ephemeral: true,
         });
       } else if (sub === "sync") {
         const isVerified = await ctx.services.user.isVerified(interaction.user.id);
         if (!isVerified) {
-          await interaction.reply({
+          await interaction.editReply({
             embeds: [errorEmbed("You are not verified. Use `/verify email` first.")],
-            ephemeral: true,
           });
           return;
         }
@@ -94,9 +92,8 @@ const command: BotCommand = {
           await member.roles.add(guild.verificationRoleId);
         }
 
-        await interaction.reply({
+        await interaction.editReply({
           embeds: [successEmbed("Your verification has been synced to this server!")],
-          ephemeral: true,
         });
       }
     } catch (err) {

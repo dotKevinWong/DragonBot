@@ -25,7 +25,7 @@ export class EmailService {
     await this.client.emails.send({
       from: this.fromEmail,
       to,
-      subject: `Your verification code for ${guildName}`,
+      subject: `Your verification code for ${guildName.replace(/[^\w\s-]/g, "").slice(0, 50)}`,
       html: `
         <h2>Email Verification</h2>
         <p>Your verification code for <strong>${safeGuildName}</strong> is:</p>

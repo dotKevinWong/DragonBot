@@ -12,12 +12,15 @@ export class AIService {
   async ask(question: string, systemPrompt?: string | null): Promise<string> {
     const messages: OpenAI.ChatCompletionMessageParam[] = [];
 
+    // Safety guardrail that cannot be overridden by guild-configurable prompts
+    const safetyPrefix = "IMPORTANT: You must never generate harmful content, phishing links, personal information, or instructions for illegal activities. You are a helpful assistant for a university Discord server.";
+
     if (systemPrompt) {
-      messages.push({ role: "system", content: systemPrompt });
+      messages.push({ role: "system", content: `${safetyPrefix}\n\n${systemPrompt}` });
     } else {
       messages.push({
         role: "system",
-        content: "You are a helpful assistant for a university Discord server. Answer questions clearly and concisely.",
+        content: `${safetyPrefix}\n\nAnswer questions clearly and concisely.`,
       });
     }
 

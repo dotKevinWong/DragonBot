@@ -11,6 +11,7 @@ import { successEmbed, errorEmbed, infoEmbed } from "../utils/embeds.js";
 import { cronToHuman } from "../services/scheduled-message.service.js";
 
 const command: BotCommand = {
+  ephemeral: true,
   data: new SlashCommandBuilder()
     .setName("schedule")
     .setDescription("Manage scheduled messages")
@@ -97,13 +98,11 @@ const command: BotCommand = {
           opt.setName("embed-color").setDescription("New embed color hex"),
         ),
     )
-    .addSubcommand((sub) =>
-      sub.setName("reload").setDescription("Reload schedules from database (use after web dashboard changes)"),
-    ),
+    ,
 
   async execute(interaction: ChatInputCommandInteraction, ctx: BotContext) {
     if (!interaction.guildId) {
-      await interaction.reply({ embeds: [errorEmbed("This command can only be used in a server.")], ephemeral: true });
+      await interaction.editReply({ embeds: [errorEmbed("This command can only be used in a server.")] });
       return;
     }
 
@@ -137,14 +136,13 @@ const command: BotCommand = {
           ctx.scheduler.addJob(schedule);
         }
 
-        await interaction.reply({
+        await interaction.editReply({
           embeds: [successEmbed(
             `Scheduled message #${schedule.id} created!\n` +
             `**Channel:** <#${channel.id}>\n` +
             `**Schedule:** ${cronToHuman(schedule.cronExpression)}\n` +
             `**Timezone:** ${schedule.timezone}`,
           )],
-          ephemeral: true,
         });
       } catch (err) {
         if (err instanceof AppError) {
@@ -163,7 +161,7 @@ const command: BotCommand = {
         if (ctx.scheduler) {
           ctx.scheduler.removeJob(id);
         }
-        await interaction.reply({ embeds: [successEmbed(`Scheduled message #${id} removed.`)], ephemeral: true });
+        await interaction.editReply({ embeds: [successEmbed(`Scheduled message #${id} removed.`)] });
       } catch (err) {
         if (err instanceof AppError) {
           await interaction.reply({ embeds: [errorEmbed(err.message)], ephemeral: true });
@@ -177,7 +175,7 @@ const command: BotCommand = {
     if (sub === "list") {
       const schedules = await ctx.services.scheduledMessage.listByGuild(guildId);
       if (schedules.length === 0) {
-        await interaction.reply({ embeds: [infoEmbed("No scheduled messages configured.")], ephemeral: true });
+        await interaction.editReply({ embeds: [infoEmbed("No scheduled messages configured.")] });
         return;
       }
 
@@ -189,9 +187,8 @@ const command: BotCommand = {
           `  \`${preview}\``;
       });
 
-      await interaction.reply({
+      await interaction.editReply({
         embeds: [infoEmbed(`**Scheduled Messages**\n\n${lines.join("\n\n")}`)],
-        ephemeral: true,
       });
       return;
     }
@@ -204,7 +201,7 @@ const command: BotCommand = {
           await ctx.scheduler.reloadJob(id);
         }
         const status = updated?.isEnabled ? "enabled" : "disabled";
-        await interaction.reply({ embeds: [successEmbed(`Scheduled message #${id} ${status}.`)], ephemeral: true });
+        await interaction.editReply({ embeds: [successEmbed(`Scheduled message #${id} ${status}.`)] });
       } catch (err) {
         if (err instanceof AppError) {
           await interaction.reply({ embeds: [errorEmbed(err.message)], ephemeral: true });
@@ -235,7 +232,7 @@ const command: BotCommand = {
       if (embedColor !== null) updates.embedColor = embedColor || null;
 
       if (Object.keys(updates).length === 0) {
-        await interaction.reply({ embeds: [errorEmbed("No changes provided. Specify at least one option to edit.")], ephemeral: true });
+        await interaction.editReply({ embeds: [errorEmbed("No changes provided. Specify at least one option to edit.")] });
         return;
       }
 
@@ -244,9 +241,8 @@ const command: BotCommand = {
         if (ctx.scheduler) {
           await ctx.scheduler.reloadJob(id);
         }
-        await interaction.reply({
+        await interaction.editReply({
           embeds: [successEmbed(`Scheduled message #${id} updated!`)],
-          ephemeral: true,
         });
       } catch (err) {
         if (err instanceof AppError) {
@@ -263,28 +259,16 @@ const command: BotCommand = {
       if (ctx.scheduler) {
         const success = await ctx.scheduler.testJob(id, guildId);
         if (success) {
-          await interaction.reply({ embeds: [successEmbed(`Test message #${id} sent!`)], ephemeral: true });
+          await interaction.editReply({ embeds: [successEmbed(`Test message #${id} sent!`)] });
         } else {
-          await interaction.reply({ embeds: [errorEmbed("Scheduled message not found.")], ephemeral: true });
+          await interaction.editReply({ embeds: [errorEmbed("Scheduled message not found.")] });
         }
       } else {
-        await interaction.reply({ embeds: [errorEmbed("Scheduler not ready yet.")], ephemeral: true });
+        await interaction.editReply({ embeds: [errorEmbed("Scheduler not ready yet.")] });
       }
       return;
     }
 
-    if (sub === "reload") {
-      if (ctx.scheduler) {
-        await ctx.scheduler.reload();
-        await interaction.reply({
-          embeds: [successEmbed(`Schedules reloaded! ${ctx.scheduler.activeJobCount} active job(s).`)],
-          ephemeral: true,
-        });
-      } else {
-        await interaction.reply({ embeds: [errorEmbed("Scheduler not ready yet.")], ephemeral: true });
-      }
-      return;
-    }
   },
 };
 

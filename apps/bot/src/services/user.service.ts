@@ -1,8 +1,12 @@
 import type { UserRepository } from "../repositories/user.repository.js";
 import type { users } from "@dragonbot/db";
 import { AppError, ErrorCode } from "../types/errors.js";
+import { TTLCache } from "../utils/cache.js";
 
 export class UserService {
+  // Cache verification status — checked frequently by /ask and event handlers
+  private verifiedCache = new TTLCache<boolean>(86400); // 24h (invalidated on markVerified, TTL is safety net only)
+
   constructor(private repo: UserRepository) {}
 
   async getOrCreate(discordId: string) {
@@ -21,14 +25,22 @@ export class UserService {
   }
 
   async isVerified(discordId: string): Promise<boolean> {
+    const cached = this.verifiedCache.get(discordId);
+    if (cached !== undefined) return cached;
+
     const user = await this.repo.findByDiscordId(discordId);
-    return user?.isVerified ?? false;
+    const verified = user?.isVerified ?? false;
+    this.verifiedCache.set(discordId, verified);
+    return verified;
   }
 
   async markVerified(discordId: string, email: string) {
     // Ensure user exists
     await this.repo.upsert(discordId);
-    return this.repo.markVerified(discordId, email);
+    const result = await this.repo.markVerified(discordId, email);
+    // Update cache immediately
+    this.verifiedCache.set(discordId, true);
+    return result;
   }
 
   async markBanned(discordId: string, banGuildId: string) {

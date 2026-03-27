@@ -251,7 +251,7 @@ export default function SchedulesPage() {
         <div className="px-4 py-3 rounded-md mb-6 text-sm bg-dc-warning/10 border border-dc-warning/30 text-dc-warning flex items-start gap-2">
           <span className="shrink-0 mt-0.5">⚠️</span>
           <div>
-            <p>Run <code className="bg-dc-bg-tertiary px-1.5 py-0.5 rounded text-xs">/schedule reload</code> in Discord to apply these changes to the bot.</p>
+            <p>Run <code className="bg-dc-bg-tertiary px-1.5 py-0.5 rounded text-xs">/admin reload</code> in Discord to apply these changes to the bot.</p>
             <button onClick={() => setShowReloadHint(false)} className="text-xs text-dc-text-muted hover:text-dc-text-secondary mt-1 cursor-pointer">Dismiss</button>
           </div>
         </div>

@@ -3,7 +3,11 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "DragonBot Dashboard",
-  description: "Manage your DragonBot settings and profile",
+  description: "The Discord Bot for Drexel University",
+  icons: {
+    icon: "/dragonbot.png",
+    apple: "/dragonbot.png",
+  },
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

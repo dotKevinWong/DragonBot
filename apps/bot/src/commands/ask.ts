@@ -14,24 +14,22 @@ const command: BotCommand = {
 
   async execute(interaction: ChatInputCommandInteraction, ctx: BotContext) {
     if (!interaction.guildId) {
-      await interaction.reply({ embeds: [errorEmbed("This command can only be used in a server.")], ephemeral: true });
+      await interaction.editReply({ embeds: [errorEmbed("This command can only be used in a server.")] });
       return;
     }
 
     const guild = await ctx.services.guild.getSettings(interaction.guildId);
     if (guild && !guild.isAskEnabled) {
-      await interaction.reply({ embeds: [errorEmbed("The AI ask feature is disabled in this server.")], ephemeral: true });
+      await interaction.editReply({ embeds: [errorEmbed("The AI ask feature is disabled in this server.")] });
       return;
     }
 
     // Check verification
     const isVerified = await ctx.services.user.isVerified(interaction.user.id);
     if (!isVerified) {
-      await interaction.reply({ embeds: [errorEmbed("You must be verified to use this command. Use `/verify email` first.")], ephemeral: true });
+      await interaction.editReply({ embeds: [errorEmbed("You must be verified to use this command. Use `/verify email` first.")] });
       return;
     }
-
-    await interaction.deferReply();
 
     try {
       const question = interaction.options.getString("question", true);

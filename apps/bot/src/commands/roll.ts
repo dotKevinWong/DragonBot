@@ -4,6 +4,7 @@ import type { BotCommand } from "../types/commands.js";
 import { infoEmbed } from "../utils/embeds.js";
 
 const command: BotCommand = {
+  skipDefer: true,
   data: new SlashCommandBuilder()
     .setName("roll")
     .setDescription("Roll a d20"),

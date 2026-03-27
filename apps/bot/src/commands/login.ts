@@ -10,6 +10,7 @@ import type { BotCommand } from "../types/commands.js";
 import { successEmbed, errorEmbed } from "../utils/embeds.js";
 
 const command: BotCommand = {
+  ephemeral: true,
   data: new SlashCommandBuilder()
     .setName("login")
     .setDescription("Get a link to the web dashboard"),
@@ -30,10 +31,9 @@ const command: BotCommand = {
           .setURL(url),
       );
 
-      await interaction.reply({
+      await interaction.editReply({
         embeds: [successEmbed("Click the button below to access the web dashboard. This link expires in 5 minutes.")],
         components: [row],
-        ephemeral: true,
       });
     } catch (err) {
       ctx.logger.error({ err }, "Error in /login");

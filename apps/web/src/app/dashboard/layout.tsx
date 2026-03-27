@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
+import Image from "next/image";
 
 interface GuildInfo {
   guildId: string;
@@ -82,12 +83,14 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         </a>
       </div>
 
-      {/* Servers */}
-      <div className="px-4 pt-4 pb-1">
-        <p className="text-[11px] font-semibold text-dc-text-muted uppercase tracking-wide">
-          Your Servers
-        </p>
-      </div>
+      {/* Servers — only show section if loading or has servers */}
+      {(loadingGuilds || guilds.length > 0) && (
+        <div className="px-4 pt-4 pb-1">
+          <p className="text-[11px] font-semibold text-dc-text-muted uppercase tracking-wide">
+            Your Servers
+          </p>
+        </div>
+      )}
 
       <div className="flex-1 overflow-y-auto px-2 pb-4">
         {loadingGuilds && (
@@ -95,12 +98,6 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             <div className="h-10 bg-dc-bg-tertiary rounded-md animate-pulse" />
             <div className="h-10 bg-dc-bg-tertiary rounded-md animate-pulse" />
           </div>
-        )}
-
-        {!loadingGuilds && guilds.length === 0 && (
-          <p className="px-3 py-2 text-xs text-dc-text-muted">
-            No servers found.
-          </p>
         )}
 
         {guilds.map((guild) => {
@@ -178,7 +175,8 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     <div className="flex min-h-screen">
       {/* Desktop sidebar */}
       <nav className="hidden md:flex w-60 h-screen sticky top-0 bg-dc-bg-secondary border-r border-dc-border flex-col shrink-0">
-        <div className="px-4 py-5 border-b border-dc-border">
+        <div className="px-4 py-5 border-b border-dc-border flex items-center gap-3">
+          <Image src="/dragonbot.png" alt="DragonBot" width={32} height={32} className="rounded-lg" />
           <h2 className="text-base font-semibold text-dc-text-primary">DragonBot</h2>
         </div>
         {sidebarContent}
@@ -186,7 +184,10 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
       {/* Mobile header */}
       <div className="md:hidden fixed top-0 left-0 right-0 z-40 bg-dc-bg-secondary border-b border-dc-border px-4 py-3 flex items-center justify-between">
-        <h2 className="text-base font-semibold text-dc-text-primary">DragonBot</h2>
+        <div className="flex items-center gap-2">
+          <Image src="/dragonbot.png" alt="DragonBot" width={28} height={28} className="rounded-lg" />
+          <h2 className="text-base font-semibold text-dc-text-primary">DragonBot</h2>
+        </div>
         <button
           onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
           className="text-dc-text-secondary hover:text-dc-text-primary cursor-pointer p-1"

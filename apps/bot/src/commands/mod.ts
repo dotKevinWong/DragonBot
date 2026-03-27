@@ -10,6 +10,7 @@ import type { BotCommand } from "../types/commands.js";
 import { successEmbed, errorEmbed } from "../utils/embeds.js";
 
 const command: BotCommand = {
+  skipDefer: true,
   data: new SlashCommandBuilder()
     .setName("mod")
     .setDescription("Moderation tools")
@@ -54,7 +55,7 @@ const command: BotCommand = {
         });
 
       await channel.send({ embeds: [embed] });
-      await interaction.reply({ embeds: [successEmbed("Announcement sent!")], ephemeral: true });
+      await interaction.editReply({ embeds: [successEmbed("Announcement sent!")] });
     } else if (sub === "react") {
       const messageId = interaction.options.getString("message_id", true);
       const emote = interaction.options.getString("emote", true);
@@ -63,7 +64,7 @@ const command: BotCommand = {
         const channel = interaction.channel as TextChannel;
         const message = await channel.messages.fetch(messageId);
         await message.react(emote);
-        await interaction.reply({ embeds: [successEmbed("Reaction added!")], ephemeral: true });
+        await interaction.editReply({ embeds: [successEmbed("Reaction added!")] });
       } catch (err) {
         ctx.logger.warn({ err }, "Failed to add reaction");
         await interaction.reply({ embeds: [errorEmbed("Failed to add reaction. Check the message ID and emoji.")], ephemeral: true });

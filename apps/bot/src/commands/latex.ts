@@ -4,6 +4,7 @@ import type { BotCommand } from "../types/commands.js";
 import { errorEmbed } from "../utils/embeds.js";
 
 const command: BotCommand = {
+  skipDefer: true,
   data: new SlashCommandBuilder()
     .setName("latex")
     .setDescription("Converts LaTeX to an image")

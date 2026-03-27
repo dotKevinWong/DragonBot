@@ -14,7 +14,7 @@ const command: BotCommand = {
 
   async execute(interaction: ChatInputCommandInteraction, ctx: BotContext) {
     if (!interaction.guildId) {
-      await interaction.reply({ embeds: [errorEmbed("This command can only be used in a server.")], ephemeral: true });
+      await interaction.editReply({ embeds: [errorEmbed("This command can only be used in a server.")] });
       return;
     }
 
@@ -27,9 +27,8 @@ const command: BotCommand = {
         suggestion,
       });
 
-      await interaction.reply({
+      await interaction.editReply({
         embeds: [successEmbed(`Suggestion #${record.id} submitted! Thank you.`)],
-        ephemeral: true,
       });
 
       // Post to mod notes channel if configured

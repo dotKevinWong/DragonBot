@@ -3,6 +3,7 @@ import type { BotContext } from "../types/context.js";
 import type { BotCommand } from "../types/commands.js";
 
 const command: BotCommand = {
+  ephemeral: true,
   data: new SlashCommandBuilder()
     .setName("help")
     .setDescription("List all available commands"),
@@ -76,7 +77,7 @@ const command: BotCommand = {
       .setFooter({ text: isAdmin || isCustomAdmin ? "Showing all commands" : isMod ? "Showing general + mod commands" : "Showing general commands" })
       .setTimestamp();
 
-    await interaction.reply({ embeds: [embed], ephemeral: true });
+    await interaction.editReply({ embeds: [embed] });
   },
 };
 

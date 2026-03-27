@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 
 export default function OAuthPage() {
@@ -19,8 +19,13 @@ function OAuthContent() {
   const searchParams = useSearchParams();
   const [status, setStatus] = useState<"loading" | "success" | "error">("loading");
   const [error, setError] = useState<string | null>(null);
+  const didRun = useRef(false);
 
   useEffect(() => {
+    // Prevent React strict mode double-fire from consuming the token twice
+    if (didRun.current) return;
+    didRun.current = true;
+
     const token = searchParams.get("token");
     if (!token) {
       setStatus("error");
@@ -42,9 +47,7 @@ function OAuthContent() {
         return res.json();
       })
       .then(() => {
-        // JWT is now in an httpOnly cookie — no localStorage needed
         setStatus("success");
-        // Replace the URL to remove the token from browser history
         window.history.replaceState({}, "", "/oauth");
         window.location.href = "/dashboard/profile";
       })

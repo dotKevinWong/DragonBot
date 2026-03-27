@@ -38,7 +38,7 @@ const command: BotCommand = {
         .setFooter({ text: profile.isVerified ? "Verified" : "Not verified" })
         .setTimestamp();
 
-      await interaction.reply({ embeds: [embed] });
+      await interaction.editReply({ embeds: [embed] });
 
       // Notify target user via DM if it's not themselves
       if (targetUser.id !== interaction.user.id) {

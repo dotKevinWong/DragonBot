@@ -9,8 +9,8 @@ import { users } from "@dragonbot/db/schema";
 export async function POST(request: Request) {
   try {
     const body = (await request.json()) as { token?: string };
-    if (!body.token) {
-      return NextResponse.json({ error: "Token is required", code: "VALIDATION_ERROR" }, { status: 400 });
+    if (!body.token || typeof body.token !== "string" || body.token.length !== 64 || !/^[a-f0-9]+$/.test(body.token)) {
+      return NextResponse.json({ error: "Invalid token format", code: "VALIDATION_ERROR" }, { status: 400 });
     }
 
     // Atomic token exchange — find valid token AND mark as used in one query

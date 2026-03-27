@@ -16,6 +16,7 @@ import { successEmbed, errorEmbed, infoEmbed } from "../utils/embeds.js";
 import { SUBCOMMAND_SCOPE_MAP, PERMISSION_SCOPES } from "@dragonbot/db";
 
 const command: BotCommand = {
+  ephemeral: true,
   data: new SlashCommandBuilder()
     .setName("admin")
     .setDescription("Server configuration commands")
@@ -168,11 +169,14 @@ const command: BotCommand = {
             .setDescription("Comma-separated scopes (e.g. verification,welcome,logging)")
             .setRequired(true),
         ),
+    )
+    .addSubcommand((sub) =>
+      sub.setName("reload").setDescription("Reload all caches and schedules (use after web dashboard changes)"),
     ),
 
   async execute(interaction: ChatInputCommandInteraction, ctx: BotContext) {
     if (!interaction.guildId) {
-      await interaction.reply({ embeds: [errorEmbed("This command can only be used in a server.")], ephemeral: true });
+      await interaction.editReply({ embeds: [errorEmbed("This command can only be used in a server.")] });
       return;
     }
 
@@ -194,29 +198,28 @@ const command: BotCommand = {
         // Manager subcommands require "managers" scope
         const hasManagerPerm = await ctx.services.guildAdmin.hasPermission(guildId, userId, "managers");
         if (!hasManagerPerm) {
-          await interaction.reply({ embeds: [errorEmbed("You don't have permission to manage guild managers.")], ephemeral: true });
+          await interaction.editReply({ embeds: [errorEmbed("You don't have permission to manage guild managers.")] });
           return;
         }
       } else if (sub === "view-settings") {
         // Any permission grants read access
         const hasAny = await ctx.services.guildAdmin.hasAnyPermission(guildId, userId);
         if (!hasAny) {
-          await interaction.reply({ embeds: [errorEmbed("You don't have permission to view server settings.")], ephemeral: true });
+          await interaction.editReply({ embeds: [errorEmbed("You don't have permission to view server settings.")] });
           return;
         }
       } else {
         // Regular settings subcommands — check specific scope
         const requiredScope = SUBCOMMAND_SCOPE_MAP[sub];
         if (!requiredScope) {
-          await interaction.reply({ embeds: [errorEmbed("Permission denied.")], ephemeral: true });
+          await interaction.editReply({ embeds: [errorEmbed("Permission denied.")] });
           return;
         }
 
         const hasPerm = await ctx.services.guildAdmin.hasPermission(guildId, userId, requiredScope);
         if (!hasPerm) {
-          await interaction.reply({
+          await interaction.editReply({
             embeds: [errorEmbed(`You don't have the \`${requiredScope}\` permission to change this setting.`)],
-            ephemeral: true,
           });
           return;
         }
@@ -235,9 +238,8 @@ const command: BotCommand = {
         if (!callerPerms.includes("*")) {
           const unauthorized = permissions.filter((p) => p !== "*" && !callerPerms.includes(p));
           if (unauthorized.length > 0 || permissions.includes("*")) {
-            await interaction.reply({
+            await interaction.editReply({
               embeds: [errorEmbed(`You can only grant permissions you have. Missing: ${permissions.includes("*") ? "*" : unauthorized.join(", ")}`)],
-              ephemeral: true,
             });
             return;
           }
@@ -246,9 +248,8 @@ const command: BotCommand = {
 
       try {
         await ctx.services.guildAdmin.addAdmin(guildId, targetUser.id, permissions, userId);
-        await interaction.reply({
+        await interaction.editReply({
           embeds: [successEmbed(`Added ${targetUser.toString()} as a manager with permissions: \`${permissions.join(", ")}\``)],
-          ephemeral: true,
         });
       } catch (err) {
         if (err instanceof AppError) {
@@ -264,9 +265,8 @@ const command: BotCommand = {
       const targetUser = interaction.options.getUser("user", true);
       try {
         await ctx.services.guildAdmin.removeAdmin(guildId, targetUser.id);
-        await interaction.reply({
+        await interaction.editReply({
           embeds: [successEmbed(`Removed ${targetUser.toString()} as a manager.`)],
-          ephemeral: true,
         });
       } catch (err) {
         if (err instanceof AppError) {
@@ -281,16 +281,15 @@ const command: BotCommand = {
     if (sub === "managers-list") {
       const admins = await ctx.services.guildAdmin.listAdmins(guildId);
       if (admins.length === 0) {
-        await interaction.reply({ embeds: [infoEmbed("No custom guild managers configured.")], ephemeral: true });
+        await interaction.editReply({ embeds: [infoEmbed("No custom guild managers configured.")] });
         return;
       }
 
       const lines = admins.map(
         (a) => `<@${a.discordId}> — \`${a.permissions.join(", ")}\` (added by <@${a.addedBy}>)`,
       );
-      await interaction.reply({
+      await interaction.editReply({
         embeds: [infoEmbed(`**Guild Managers**\n\n${lines.join("\n")}`)],
-        ephemeral: true,
       });
       return;
     }
@@ -306,9 +305,8 @@ const command: BotCommand = {
         if (!callerPerms.includes("*")) {
           const unauthorized = permissions.filter((p) => p !== "*" && !callerPerms.includes(p));
           if (unauthorized.length > 0 || permissions.includes("*")) {
-            await interaction.reply({
+            await interaction.editReply({
               embeds: [errorEmbed(`You can only grant permissions you have. Missing: ${permissions.includes("*") ? "*" : unauthorized.join(", ")}`)],
-              ephemeral: true,
             });
             return;
           }
@@ -317,9 +315,8 @@ const command: BotCommand = {
 
       try {
         await ctx.services.guildAdmin.updatePermissions(guildId, targetUser.id, permissions, userId);
-        await interaction.reply({
+        await interaction.editReply({
           embeds: [successEmbed(`Updated ${targetUser.toString()} permissions to: \`${permissions.join(", ")}\``)],
-          ephemeral: true,
         });
       } catch (err) {
         if (err instanceof AppError) {
@@ -331,11 +328,29 @@ const command: BotCommand = {
       return;
     }
 
+    if (sub === "reload") {
+      try {
+        // Clear all in-memory caches
+        ctx.services.guild.invalidateCache(guildId);
+        // Reload scheduled messages
+        if (ctx.scheduler) {
+          await ctx.scheduler.reload();
+        }
+        await interaction.editReply({
+          embeds: [successEmbed(`Caches cleared and schedules reloaded! ${ctx.scheduler?.activeJobCount ?? 0} active job(s).`)],
+        });
+      } catch (err) {
+        ctx.logger.error({ err }, "Failed to reload");
+        await interaction.editReply({ embeds: [errorEmbed("Failed to reload. Check logs.")] });
+      }
+      return;
+    }
+
     // --- Existing settings subcommands ---
     if (sub === "view-settings") {
       const settings = await ctx.services.guild.getSettings(guildId);
       if (!settings) {
-        await interaction.reply({ embeds: [errorEmbed("No settings found.")], ephemeral: true });
+        await interaction.editReply({ embeds: [errorEmbed("No settings found.")] });
         return;
       }
 
@@ -354,7 +369,7 @@ const command: BotCommand = {
         `**AI Ask:** ${settings.isAskEnabled ? "Enabled" : "Disabled"}`,
       ];
 
-      await interaction.reply({ embeds: [infoEmbed(lines.join("\n"))], ephemeral: true });
+      await interaction.editReply({ embeds: [infoEmbed(lines.join("\n"))] });
       return;
     }
 
@@ -406,12 +421,12 @@ const command: BotCommand = {
 
     const getSettings = settingsMap[sub];
     if (!getSettings) {
-      await interaction.reply({ embeds: [errorEmbed("Unknown subcommand.")], ephemeral: true });
+      await interaction.editReply({ embeds: [errorEmbed("Unknown subcommand.")] });
       return;
     }
 
     await ctx.services.guild.updateSettings(guildId, getSettings() as Record<string, unknown>);
-    await interaction.reply({ embeds: [successEmbed("Setting updated!")], ephemeral: true });
+    await interaction.editReply({ embeds: [successEmbed("Setting updated!")] });
   },
 
   async modal(interaction: ModalSubmitInteraction, ctx: BotContext) {
