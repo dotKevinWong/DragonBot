@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { eq } from "drizzle-orm";
 import { guilds, FIELD_SCOPE_MAP } from "@dragonbot/db";
 import { db } from "@/lib/db";
-import { getDiscordIdFromRequest } from "@/lib/auth";
+import { getAuthenticatedUser } from "@/lib/auth";
 import { checkGuildPermission, getUserGuildPermissions } from "@/lib/discord";
 import { guildSettingsUpdateSchema } from "@/lib/validators";
 
@@ -10,7 +10,7 @@ export async function GET(
   request: Request,
   { params }: { params: Promise<{ guildId: string }> },
 ) {
-  const discordId = getDiscordIdFromRequest(request);
+  const discordId = await getAuthenticatedUser(request);
   if (!discordId) {
     return NextResponse.json({ error: "Unauthorized", code: "UNAUTHORIZED" }, { status: 401 });
   }
@@ -30,14 +30,15 @@ export async function GET(
     return NextResponse.json({ error: "Server not found", code: "NOT_FOUND" }, { status: 404 });
   }
 
-  return NextResponse.json(guild);
+  const { id: _id, ...safeGuild } = guild;
+  return NextResponse.json(safeGuild);
 }
 
 export async function PATCH(
   request: Request,
   { params }: { params: Promise<{ guildId: string }> },
 ) {
-  const discordId = getDiscordIdFromRequest(request);
+  const discordId = await getAuthenticatedUser(request);
   if (!discordId) {
     return NextResponse.json({ error: "Unauthorized", code: "UNAUTHORIZED" }, { status: 401 });
   }
@@ -54,7 +55,7 @@ export async function PATCH(
   const parsed = guildSettingsUpdateSchema.safeParse(body);
   if (!parsed.success) {
     return NextResponse.json(
-      { error: "Invalid data", code: "VALIDATION_ERROR", details: parsed.error.issues },
+      { error: "Invalid data", code: "VALIDATION_ERROR", ...(process.env.NODE_ENV !== "production" && { details: parsed.error.issues }) },
       { status: 400 },
     );
   }
@@ -96,5 +97,6 @@ export async function PATCH(
     return NextResponse.json({ error: "Server not found", code: "NOT_FOUND" }, { status: 404 });
   }
 
-  return NextResponse.json(rows[0]);
+  const { id: _id2, ...safeUpdated } = rows[0]!;
+  return NextResponse.json(safeUpdated);
 }

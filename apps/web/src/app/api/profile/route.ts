@@ -2,11 +2,11 @@ import { NextResponse } from "next/server";
 import { eq } from "drizzle-orm";
 import { users } from "@dragonbot/db/schema";
 import { db } from "@/lib/db";
-import { getDiscordIdFromRequest } from "@/lib/auth";
+import { getAuthenticatedUser } from "@/lib/auth";
 import { profileUpdateSchema } from "@/lib/validators";
 
 export async function GET(request: Request) {
-  const discordId = getDiscordIdFromRequest(request);
+  const discordId = await getAuthenticatedUser(request);
   if (!discordId) {
     return NextResponse.json({ error: "Unauthorized", code: "UNAUTHORIZED" }, { status: 401 });
   }
@@ -18,11 +18,13 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: "Profile not found", code: "NOT_FOUND" }, { status: 404 });
   }
 
-  return NextResponse.json(user);
+  // Strip sensitive fields
+  const { id: _id, email: _email, jwtInvalidBefore: _jib, banGuildId: _bg, bannedAt: _ba, isBanned: _ib, ...safeUser } = user;
+  return NextResponse.json(safeUser);
 }
 
 export async function PATCH(request: Request) {
-  const discordId = getDiscordIdFromRequest(request);
+  const discordId = await getAuthenticatedUser(request);
   if (!discordId) {
     return NextResponse.json({ error: "Unauthorized", code: "UNAUTHORIZED" }, { status: 401 });
   }
@@ -31,7 +33,7 @@ export async function PATCH(request: Request) {
   const parsed = profileUpdateSchema.safeParse(body);
   if (!parsed.success) {
     return NextResponse.json(
-      { error: "Invalid data", code: "VALIDATION_ERROR", details: parsed.error.issues },
+      { error: "Invalid data", code: "VALIDATION_ERROR", ...(process.env.NODE_ENV !== "production" && { details: parsed.error.issues }) },
       { status: 400 },
     );
   }
@@ -46,5 +48,6 @@ export async function PATCH(request: Request) {
     return NextResponse.json({ error: "Profile not found", code: "NOT_FOUND" }, { status: 404 });
   }
 
-  return NextResponse.json(rows[0]);
+  const { id: _id, email: _email, jwtInvalidBefore: _jib, banGuildId: _bg, bannedAt: _ba, isBanned: _ib, ...safeUpdated } = rows[0]!;
+  return NextResponse.json(safeUpdated);
 }

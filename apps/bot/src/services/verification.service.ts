@@ -78,7 +78,9 @@ export class VerificationService {
       );
     }
 
-    if (verification.code !== code.toUpperCase()) {
+    const expected = Buffer.from(verification.code);
+    const received = Buffer.from(code.toUpperCase());
+    if (expected.length !== received.length || !crypto.timingSafeEqual(expected, received)) {
       throw new AppError(ErrorCode.VALIDATION_ERROR, "Invalid verification code.");
     }
 

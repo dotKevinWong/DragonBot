@@ -49,7 +49,7 @@ export class AuthService {
       JSON.stringify({
         discord_id: discordId,
         iat: Math.floor(Date.now() / 1000),
-        exp: Math.floor(Date.now() / 1000) + 7 * 24 * 60 * 60, // 7 days
+        exp: Math.floor(Date.now() / 1000) + 24 * 60 * 60, // 24 hours
       }),
     ).toString("base64url");
 
@@ -72,16 +72,22 @@ export class AuthService {
       .update(`${header}.${payload}`)
       .digest("base64url");
 
-    if (signature !== expectedSignature) return null;
+    try {
+      if (!crypto.timingSafeEqual(Buffer.from(signature!, "base64url"), Buffer.from(expectedSignature, "base64url"))) return null;
+    } catch {
+      return null;
+    }
 
-    const decoded = JSON.parse(Buffer.from(payload!, "base64url").toString()) as {
-      discord_id: string;
-      iat: number;
-      exp: number;
-    };
-
-    if (decoded.exp < Math.floor(Date.now() / 1000)) return null;
-
-    return decoded;
+    try {
+      const decoded = JSON.parse(Buffer.from(payload!, "base64url").toString()) as {
+        discord_id: string;
+        iat: number;
+        exp: number;
+      };
+      if (!decoded.discord_id || !decoded.exp || decoded.exp < Math.floor(Date.now() / 1000)) return null;
+      return decoded;
+    } catch {
+      return null;
+    }
   }
 }

@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { eq, and } from "drizzle-orm";
 import { scheduledMessages } from "@dragonbot/db";
 import { db } from "@/lib/db";
-import { getDiscordIdFromRequest } from "@/lib/auth";
+import { getAuthenticatedUser } from "@/lib/auth";
 import { checkGuildPermission } from "@/lib/discord";
 import { z } from "zod";
 import { markSchedulesDirty } from "@/lib/sync";
@@ -10,7 +10,10 @@ import { markSchedulesDirty } from "@/lib/sync";
 const updateSchema = z.object({
   channelId: z.string().max(20).min(1).optional(),
   message: z.string().max(4000).min(1).optional(),
-  cronExpression: z.string().max(100).min(1).optional(),
+  cronExpression: z.string().max(100).min(1).regex(
+    /^[\d*\/,-]+\s+[\d*\/,-]+\s+[\d*\/,-]+\s+[\d*\/,-]+\s+[\d*\/,-]+$/,
+    "Invalid cron expression format (expected 5 fields)",
+  ).optional(),
   timezone: z.string().max(50).optional(),
   isEnabled: z.boolean().optional(),
   isEmbed: z.boolean().optional(),
@@ -22,7 +25,7 @@ export async function PATCH(
   request: Request,
   { params }: { params: Promise<{ guildId: string; scheduleId: string }> },
 ) {
-  const discordId = getDiscordIdFromRequest(request);
+  const discordId = await getAuthenticatedUser(request);
   if (!discordId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
@@ -38,7 +41,7 @@ export async function PATCH(
   const parsed = updateSchema.safeParse(body);
   if (!parsed.success) {
     return NextResponse.json(
-      { error: "Invalid data", details: parsed.error.issues },
+      { error: "Invalid data", ...(process.env.NODE_ENV !== "production" && { details: parsed.error.issues }) },
       { status: 400 },
     );
   }
@@ -61,7 +64,7 @@ export async function DELETE(
   request: Request,
   { params }: { params: Promise<{ guildId: string; scheduleId: string }> },
 ) {
-  const discordId = getDiscordIdFromRequest(request);
+  const discordId = await getAuthenticatedUser(request);
   if (!discordId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }

@@ -387,12 +387,15 @@ const command: BotCommand = {
       "dm-message-toggle": () => ({ isDmWelcomeEnabled: interaction.options.getBoolean("enabled", true) }),
       "log-channel": () => ({ logChannelId: interaction.options.getChannel("channel", true).id }),
       "log-toggle": () => ({ isLoggingEnabled: interaction.options.getBoolean("enabled", true) }),
-      "log-events": () => ({
-        logEvents: interaction.options
+      "log-events": () => {
+        const VALID_EVENTS = ["member_join", "member_leave", "message_delete", "message_edit", "role_change", "nickname_change", "voice_activity", "kick", "ban"];
+        const events = interaction.options
           .getString("events", true)
           .split(",")
-          .map((e) => e.trim().toLowerCase()),
-      }),
+          .map((e) => e.trim().toLowerCase())
+          .filter((e) => VALID_EVENTS.includes(e));
+        return { logEvents: events };
+      },
       "intro-channel": () => ({ introChannelId: interaction.options.getChannel("channel", true).id }),
       "intro-role": () => ({ introRoleId: interaction.options.getRole("role", true).id }),
       "intro-toggle": () => ({ isIntroGateEnabled: interaction.options.getBoolean("enabled", true) }),
@@ -413,10 +416,23 @@ const command: BotCommand = {
 
   async modal(interaction: ModalSubmitInteraction, ctx: BotContext) {
     if (interaction.customId === "admin:dm-message") {
-      const message = interaction.fields.getTextInputValue("message");
-      if (interaction.guildId) {
-        await ctx.services.guild.updateSettings(interaction.guildId, { dmWelcomeMessage: message });
+      if (!interaction.guildId) {
+        await interaction.reply({ embeds: [errorEmbed("This can only be used in a server.")], ephemeral: true });
+        return;
       }
+
+      // Re-verify permissions (user may have lost access since opening the modal)
+      const hasManageGuild = interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild) ?? false;
+      if (!hasManageGuild) {
+        const hasPerm = await ctx.services.guildAdmin.hasPermission(interaction.guildId, interaction.user.id, "welcome");
+        if (!hasPerm) {
+          await interaction.reply({ embeds: [errorEmbed("You no longer have permission to change this setting.")], ephemeral: true });
+          return;
+        }
+      }
+
+      const message = interaction.fields.getTextInputValue("message");
+      await ctx.services.guild.updateSettings(interaction.guildId, { dmWelcomeMessage: message });
       await interaction.reply({ embeds: [successEmbed("DM welcome message updated!")], ephemeral: true });
     }
   },

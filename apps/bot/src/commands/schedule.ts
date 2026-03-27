@@ -261,7 +261,7 @@ const command: BotCommand = {
     if (sub === "test") {
       const id = interaction.options.getString("id", true);
       if (ctx.scheduler) {
-        const success = await ctx.scheduler.testJob(id);
+        const success = await ctx.scheduler.testJob(id, guildId);
         if (success) {
           await interaction.reply({ embeds: [successEmbed(`Test message #${id} sent!`)], ephemeral: true });
         } else {

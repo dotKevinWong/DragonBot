@@ -139,7 +139,7 @@ function PlaceholderTextarea({ label, value, onChange, placeholder, placeholders
     // Restore channel mentions as styled spans
     html = html.replace(/&lt;#(\d+)&gt;/g, (_, id) => {
       const ch = channels?.find((c) => c.id === id);
-      const name = ch ? ch.name : id;
+      const name = (ch ? ch.name : id).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
       return `<span contenteditable="false" data-channel-id="${id}" class="inline-flex items-center gap-0.5 bg-[#404675] text-[#c9cdfb] rounded px-0.5 mx-px align-baseline text-xs cursor-default">#${name}</span>`;
     });
     // Style {member} and {server} placeholders
@@ -338,6 +338,11 @@ function PlaceholderTextarea({ label, value, onChange, placeholder, placeholders
           contentEditable
           suppressContentEditableWarning
           onInput={handleInput}
+          onPaste={(e) => {
+            e.preventDefault();
+            const text = e.clipboardData.getData("text/plain");
+            document.execCommand("insertText", false, text);
+          }}
           onKeyDown={(e) => {
             if (showMentions && e.key === "Escape") {
               setShowMentions(false);
@@ -457,16 +462,12 @@ export default function ServerSettingsPage() {
   const [hasDiscordData, setHasDiscordData] = useState(false);
 
   useEffect(() => {
-    const jwt = localStorage.getItem("jwt");
-    if (!jwt) { window.location.href = "/"; return; }
-
-    // Fetch settings and Discord data in parallel
     Promise.all([
-      fetch(`/api/server/${guildId}`, { headers: { Authorization: `Bearer ${jwt}` } }),
-      fetch(`/api/server/${guildId}/discord`, { headers: { Authorization: `Bearer ${jwt}` } }),
+      fetch(`/api/server/${guildId}`, { credentials: "same-origin" }),
+      fetch(`/api/server/${guildId}/discord`, { credentials: "same-origin" }),
     ])
       .then(async ([settingsRes, discordRes]) => {
-        if (settingsRes.status === 401) { localStorage.removeItem("jwt"); window.location.href = "/"; return; }
+        if (settingsRes.status === 401) { window.location.href = "/"; return; }
         if (settingsRes.status === 403) { setError("You don't have permission to manage this server."); setLoading(false); return; }
 
         const settingsData = await settingsRes.json();
@@ -495,7 +496,6 @@ export default function ServerSettingsPage() {
     setSaving(true);
     setMessage(null);
 
-    const jwt = localStorage.getItem("jwt");
     // Always include non-Discord fields
     const updateFields: Record<string, unknown> = {
       isVerificationSyncEnabled: settings.isVerificationSyncEnabled,
@@ -529,7 +529,8 @@ export default function ServerSettingsPage() {
 
     const res = await fetch(`/api/server/${guildId}`, {
       method: "PATCH",
-      headers: { Authorization: `Bearer ${jwt}`, "Content-Type": "application/json" },
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(updateFields),
     });
 

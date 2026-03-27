@@ -8,9 +8,6 @@ const event: BotEvent<"guildMemberAdd"> = {
   async execute(member: GuildMember, ctx: BotContext) {
     const log = ctx.logger.child({ event: "guildMemberAdd", guildId: member.guild.id, userId: member.id });
 
-    // Upsert user
-    await ctx.services.user.getOrCreate(member.id);
-
     const guild = await ctx.services.guild.getSettings(member.guild.id);
     if (!guild) return;
 

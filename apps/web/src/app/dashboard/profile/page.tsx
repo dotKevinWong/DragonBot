@@ -106,16 +106,9 @@ export default function ProfilePage() {
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
   useEffect(() => {
-    const jwt = localStorage.getItem("jwt");
-    if (!jwt) {
-      window.location.href = "/";
-      return;
-    }
-
-    fetch("/api/profile", { headers: { Authorization: `Bearer ${jwt}` } })
+    fetch("/api/profile", { credentials: "same-origin" })
       .then((res) => {
         if (res.status === 401) {
-          localStorage.removeItem("jwt");
           window.location.href = "/";
           return null;
         }
@@ -133,11 +126,10 @@ export default function ProfilePage() {
     setSaving(true);
     setMessage(null);
 
-    const jwt = localStorage.getItem("jwt");
     const res = await fetch("/api/profile", {
       method: "PATCH",
+      credentials: "same-origin",
       headers: {
-        Authorization: `Bearer ${jwt}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify(profile),
@@ -180,7 +172,7 @@ export default function ProfilePage() {
                   : "bg-dc-danger/20 text-dc-danger"
               }`}
             >
-              {profile.isVerified ? "✓ Verified" : "Not verified"}
+              {profile.isVerified ? "✓ Verified" : "✗ Unverified"}
               {profile.isVerified && profile.verifiedAt && (
                 <span className="absolute left-0 top-full mt-1.5 px-2.5 py-1 bg-dc-bg-tertiary border border-dc-border text-dc-text-secondary text-[11px] rounded shadow-lg whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-10">
                   Verified on {new Date(profile.verifiedAt).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })}

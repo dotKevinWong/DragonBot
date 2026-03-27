@@ -32,6 +32,7 @@ function OAuthContent() {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ token }),
+      credentials: "same-origin",
     })
       .then(async (res) => {
         if (!res.ok) {
@@ -40,9 +41,11 @@ function OAuthContent() {
         }
         return res.json();
       })
-      .then((data: { jwt: string }) => {
-        localStorage.setItem("jwt", data.jwt);
+      .then(() => {
+        // JWT is now in an httpOnly cookie — no localStorage needed
         setStatus("success");
+        // Replace the URL to remove the token from browser history
+        window.history.replaceState({}, "", "/oauth");
         window.location.href = "/dashboard/profile";
       })
       .catch((err: Error) => {

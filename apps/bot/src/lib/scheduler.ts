@@ -174,9 +174,9 @@ export class SchedulerManager {
   }
 
   /** Send a scheduled message immediately (for testing/preview) */
-  async testJob(scheduleId: string): Promise<boolean> {
+  async testJob(scheduleId: string, guildId: string): Promise<boolean> {
     const schedule = await this.service.getById(scheduleId);
-    if (!schedule) return false;
+    if (!schedule || schedule.guildId !== guildId) return false;
     await this.executeJob(schedule);
     return true;
   }

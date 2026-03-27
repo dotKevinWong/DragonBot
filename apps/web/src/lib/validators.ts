@@ -1,5 +1,10 @@
 import { z } from "zod";
 
+const VALID_LOG_EVENTS = [
+  "member_join", "member_leave", "message_delete", "message_edit",
+  "role_change", "nickname_change", "voice_activity", "kick", "ban",
+] as const;
+
 export const profileUpdateSchema = z.object({
   name: z.string().max(100).nullable().optional(),
   pronouns: z.string().max(50).nullable().optional(),
@@ -26,7 +31,7 @@ export const guildSettingsUpdateSchema = z.object({
   isDmWelcomeEnabled: z.boolean().optional(),
   logChannelId: z.string().max(20).nullable().optional(),
   isLoggingEnabled: z.boolean().optional(),
-  logEvents: z.array(z.string()).optional(),
+  logEvents: z.array(z.enum(VALID_LOG_EVENTS)).optional(),
   introChannelId: z.string().max(20).nullable().optional(),
   introRoleId: z.string().max(20).nullable().optional(),
   isIntroGateEnabled: z.boolean().optional(),

@@ -38,17 +38,16 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   useEffect(() => {
-    const jwt = localStorage.getItem("jwt");
-    if (!jwt) return;
-
-    fetch("/api/guilds", { headers: { Authorization: `Bearer ${jwt}` } })
+    // Cookie is sent automatically — no need to read localStorage
+    fetch("/api/guilds", { credentials: "same-origin" })
       .then(async (res) => {
+        if (res.status === 401) { window.location.href = "/"; return; }
         if (res.ok) setGuilds(await res.json());
         setLoadingGuilds(false);
       })
       .catch(() => setLoadingGuilds(false));
 
-    fetch("/api/auth", { headers: { Authorization: `Bearer ${jwt}` } })
+    fetch("/api/auth", { credentials: "same-origin" })
       .then(async (res) => {
         if (res.ok) setUser(await res.json());
       })
@@ -162,8 +161,8 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             {user?.display_name ?? user?.username ?? "User"}
           </p>
           <button
-            onClick={() => {
-              localStorage.removeItem("jwt");
+            onClick={async () => {
+              await fetch("/api/auth", { method: "DELETE", credentials: "same-origin" });
               window.location.href = "/";
             }}
             className="text-[11px] text-dc-text-muted hover:text-dc-danger transition-colors cursor-pointer"

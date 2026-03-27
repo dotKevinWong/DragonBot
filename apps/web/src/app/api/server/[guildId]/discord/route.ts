@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
-import { eq, and } from "drizzle-orm";
-import { guildAdmins, guilds } from "@dragonbot/db";
-import { getDiscordIdFromRequest } from "@/lib/auth";
+import { eq } from "drizzle-orm";
+import { guildAdmins } from "@dragonbot/db";
+import { getAuthenticatedUser } from "@/lib/auth";
+import { checkGuildPermission } from "@/lib/discord";
 import { env } from "@/lib/env";
 import { db } from "@/lib/db";
 
@@ -32,18 +33,22 @@ export async function GET(
   request: Request,
   { params }: { params: Promise<{ guildId: string }> },
 ) {
-  const discordId = getDiscordIdFromRequest(request);
+  const discordId = await getAuthenticatedUser(request);
   if (!discordId) {
     return NextResponse.json({ error: "Unauthorized", code: "UNAUTHORIZED" }, { status: 401 });
   }
 
   const { guildId } = await params;
 
-  // Lightweight permission check — DB only, no Discord API calls
-  // (avoids rate limiting since the settings page already checked full permissions)
-  const guildExists = await db.select({ guildId: guilds.guildId }).from(guilds).where(eq(guilds.guildId, guildId)).limit(1);
-  if (guildExists.length === 0) {
-    return NextResponse.json({ error: "Guild not found", code: "NOT_FOUND" }, { status: 404 });
+  // Check guild_admins table first (no Discord API call), then fall back to Discord permission
+  const adminRows = await db.select().from(guildAdmins).where(eq(guildAdmins.discordId, discordId)).limit(1);
+  const isCustomAdmin = adminRows.some((r) => r.guildId === guildId);
+
+  if (!isCustomAdmin) {
+    const hasPermission = await checkGuildPermission(guildId, discordId);
+    if (!hasPermission) {
+      return NextResponse.json({ error: "Forbidden", code: "UNAUTHORIZED" }, { status: 403 });
+    }
   }
 
   try {

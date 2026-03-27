@@ -19,6 +19,7 @@ export const users = pgTable("users", {
   banGuildId: varchar("ban_guild_id", { length: 20 }),
   bannedAt: timestamp("banned_at", { withTimezone: true }),
   isProfileDisabled: boolean("is_profile_disabled").notNull().default(false),
+  jwtInvalidBefore: timestamp("jwt_invalid_before", { withTimezone: true }),
   name: text("name"),
   pronouns: text("pronouns"),
   major: text("major"),

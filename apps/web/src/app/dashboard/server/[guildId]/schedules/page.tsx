@@ -98,14 +98,11 @@ export default function SchedulesPage() {
   const [showReloadHint, setShowReloadHint] = useState(false);
 
   useEffect(() => {
-    const jwt = localStorage.getItem("jwt");
-    if (!jwt) { window.location.href = "/"; return; }
-
     Promise.all([
-      fetch(`/api/server/${guildId}/schedules`, { headers: { Authorization: `Bearer ${jwt}` } }),
-      fetch(`/api/server/${guildId}/discord`, { headers: { Authorization: `Bearer ${jwt}` } }),
+      fetch(`/api/server/${guildId}/schedules`, { credentials: "same-origin" }),
+      fetch(`/api/server/${guildId}/discord`, { credentials: "same-origin" }),
     ]).then(async ([schedRes, discordRes]) => {
-      if (schedRes.status === 401) { localStorage.removeItem("jwt"); window.location.href = "/"; return; }
+      if (schedRes.status === 401) { window.location.href = "/"; return; }
       if (schedRes.status === 403) { setError("No permission."); setLoading(false); return; }
       if (schedRes.ok) setSchedules(await schedRes.json());
       if (discordRes.ok) {
@@ -119,12 +116,12 @@ export default function SchedulesPage() {
   async function handleCreate() {
     setSaving(true);
     setMessage(null);
-    const jwt = localStorage.getItem("jwt");
     const cronExpr = formCron === "custom" ? formCustomCron : formCron;
 
     const res = await fetch(`/api/server/${guildId}/schedules`, {
       method: "POST",
-      headers: { Authorization: `Bearer ${jwt}`, "Content-Type": "application/json" },
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         channelId: formChannel,
         message: formMessage,
@@ -152,10 +149,10 @@ export default function SchedulesPage() {
   }
 
   async function handleToggle(id: string, currentlyEnabled: boolean) {
-    const jwt = localStorage.getItem("jwt");
     const res = await fetch(`/api/server/${guildId}/schedules/${id}`, {
       method: "PATCH",
-      headers: { Authorization: `Bearer ${jwt}`, "Content-Type": "application/json" },
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ isEnabled: !currentlyEnabled }),
     });
     if (res.ok) {
@@ -181,10 +178,10 @@ export default function SchedulesPage() {
   async function handleSaveEdit() {
     if (editingId === null) return;
     setSaving(true);
-    const jwt = localStorage.getItem("jwt");
     const res = await fetch(`/api/server/${guildId}/schedules/${editingId}`, {
       method: "PATCH",
-      headers: { Authorization: `Bearer ${jwt}`, "Content-Type": "application/json" },
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(editData),
     });
     if (res.ok) {
@@ -202,10 +199,9 @@ export default function SchedulesPage() {
   }
 
   async function handleDelete(id: string) {
-    const jwt = localStorage.getItem("jwt");
     const res = await fetch(`/api/server/${guildId}/schedules/${id}`, {
       method: "DELETE",
-      headers: { Authorization: `Bearer ${jwt}` },
+      credentials: "same-origin",
     });
     if (res.ok) {
       setSchedules(schedules.filter((s) => s.id !== id));
