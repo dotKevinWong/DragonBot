@@ -1,5 +1,5 @@
 import { type Client, type TextChannel, EmbedBuilder } from "discord.js";
-import type { GuildRepository } from "../repositories/guild.repository.js";
+import type { GuildService } from "./guild.service.js";
 import type { Logger } from "pino";
 
 export type LogEventType =
@@ -14,10 +14,10 @@ export type LogEventType =
   | "ban";
 
 export class LoggingService {
-  constructor(private guildRepo: GuildRepository) {}
+  constructor(private guildService: GuildService) {}
 
   async shouldLog(guildId: string, eventType: LogEventType): Promise<boolean> {
-    const guild = await this.guildRepo.findByGuildId(guildId);
+    const guild = await this.guildService.getSettings(guildId);
     if (!guild) return false;
     if (!guild.isLoggingEnabled) return false;
     if (!guild.logChannelId) return false;
@@ -30,7 +30,7 @@ export class LoggingService {
     client: Client,
     logger: Logger,
   ): Promise<void> {
-    const guild = await this.guildRepo.findByGuildId(guildId);
+    const guild = await this.guildService.getSettings(guildId);
     if (!guild?.logChannelId) return;
 
     try {

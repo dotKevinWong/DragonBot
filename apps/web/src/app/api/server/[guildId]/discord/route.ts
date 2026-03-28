@@ -5,6 +5,7 @@ import { getAuthenticatedUser } from "@/lib/auth";
 import { checkGuildPermission } from "@/lib/discord";
 import { env } from "@/lib/env";
 import { db } from "@/lib/db";
+import { DISCORD_SNOWFLAKE_RE } from "@/lib/validators";
 
 interface DiscordChannel {
   id: string;
@@ -39,6 +40,10 @@ export async function GET(
   }
 
   const { guildId } = await params;
+
+  if (!DISCORD_SNOWFLAKE_RE.test(guildId)) {
+    return NextResponse.json({ error: "Not found", code: "NOT_FOUND" }, { status: 404 });
+  }
 
   // Check guild_admins table first (no Discord API call), then fall back to Discord permission
   const adminRows = await db.select().from(guildAdmins).where(eq(guildAdmins.discordId, discordId)).limit(1);

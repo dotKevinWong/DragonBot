@@ -4,6 +4,8 @@ const envSchema = z.object({
   DATABASE_URL: z.string().min(1),
   JWT_SECRET: z.string().min(32),
   DISCORD_API_TOKEN: z.string().min(1),
+  BOT_WEBHOOK_URL: z.string().url().optional(),
+  BOT_WEBHOOK_SECRET: z.string().min(16).optional(),
 });
 
 type Env = z.infer<typeof envSchema>;

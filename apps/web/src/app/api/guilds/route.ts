@@ -3,12 +3,13 @@ import { eq } from "drizzle-orm";
 import { guilds, guildAdmins } from "@dragonbot/db";
 import { db } from "@/lib/db";
 import { getAuthenticatedUser } from "@/lib/auth";
-import { checkGuildPermission, getGuildIconUrl } from "@/lib/discord";
+import { checkGuildPermission, isGuildMember, getGuildIconUrl } from "@/lib/discord";
 
 interface GuildInfo {
   guildId: string;
   guildName: string | null;
   iconUrl: string | null;
+  isAdmin: boolean;
 }
 
 const MAX_DISCORD_CHECKS = 20; // Limit Discord API calls to prevent rate limiting
@@ -33,24 +34,34 @@ export async function GET(request: Request) {
   const customAdminGuildIds = new Set(customAdminGuilds.map((g) => g.guildId));
 
   const accessible: GuildInfo[] = [];
+  const checkedGuildIds = new Set<string>();
 
   // First: add all custom admin guilds (no Discord API calls)
   for (const guild of allGuilds) {
     if (customAdminGuildIds.has(guild.guildId)) {
-      accessible.push({ ...guild, iconUrl: null });
+      accessible.push({ ...guild, iconUrl: null, isAdmin: true });
+      checkedGuildIds.add(guild.guildId);
     }
   }
 
   // Then: check Discord permissions for remaining guilds (limited to prevent rate exhaustion)
   let discordChecks = 0;
   for (const guild of allGuilds) {
-    if (customAdminGuildIds.has(guild.guildId)) continue;
+    if (checkedGuildIds.has(guild.guildId)) continue;
     if (discordChecks >= MAX_DISCORD_CHECKS) break;
 
     discordChecks++;
-    const hasAccess = await checkGuildPermission(guild.guildId, discordId);
-    if (hasAccess) {
-      accessible.push({ ...guild, iconUrl: null });
+    const hasAdmin = await checkGuildPermission(guild.guildId, discordId);
+    if (hasAdmin) {
+      accessible.push({ ...guild, iconUrl: null, isAdmin: true });
+      checkedGuildIds.add(guild.guildId);
+    } else {
+      // Not an admin — check if they're a member (for leaderboard access)
+      const isMember = await isGuildMember(guild.guildId, discordId);
+      if (isMember) {
+        accessible.push({ ...guild, iconUrl: null, isAdmin: false });
+        checkedGuildIds.add(guild.guildId);
+      }
     }
   }
 

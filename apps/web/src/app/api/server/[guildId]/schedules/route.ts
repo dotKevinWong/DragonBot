@@ -5,19 +5,17 @@ import { db } from "@/lib/db";
 import { getAuthenticatedUser } from "@/lib/auth";
 import { checkGuildPermission } from "@/lib/discord";
 import { z } from "zod";
-import { markSchedulesDirty } from "@/lib/sync";
+import { notifyBotReload } from "@/lib/bot-webhook";
+import { cronExpressionSchema, embedColorSchema, DISCORD_SNOWFLAKE_RE } from "@/lib/validators";
 
 const createSchema = z.object({
-  channelId: z.string().max(20).min(1),
-  message: z.string().max(4000).min(1),
-  cronExpression: z.string().max(100).min(1).regex(
-    /^[\d*\/,-]+\s+[\d*\/,-]+\s+[\d*\/,-]+\s+[\d*\/,-]+\s+[\d*\/,-]+$/,
-    "Invalid cron expression format (expected 5 fields)",
-  ),
+  channelId: z.string().regex(DISCORD_SNOWFLAKE_RE, "Invalid channel ID"),
+  message: z.string().trim().max(4000).min(1),
+  cronExpression: cronExpressionSchema,
   timezone: z.string().max(50).optional().default("America/New_York"),
   isEmbed: z.boolean().optional().default(false),
-  embedColor: z.string().max(7).nullable().optional(),
-  embedTitle: z.string().max(256).nullable().optional(),
+  embedColor: embedColorSchema,
+  embedTitle: z.string().trim().max(256).nullable().optional(),
 });
 
 export async function GET(
@@ -30,6 +28,10 @@ export async function GET(
   }
 
   const { guildId } = await params;
+
+  if (!DISCORD_SNOWFLAKE_RE.test(guildId)) {
+    return NextResponse.json({ error: "Not found", code: "NOT_FOUND" }, { status: 404 });
+  }
 
   const hasPermission = await checkGuildPermission(guildId, discordId);
   if (!hasPermission) {
@@ -56,6 +58,10 @@ export async function POST(
 
   const { guildId } = await params;
 
+  if (!DISCORD_SNOWFLAKE_RE.test(guildId)) {
+    return NextResponse.json({ error: "Not found", code: "NOT_FOUND" }, { status: 404 });
+  }
+
   const hasPermission = await checkGuildPermission(guildId, discordId);
   if (!hasPermission) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
@@ -79,6 +85,6 @@ export async function POST(
     })
     .returning();
 
-  await markSchedulesDirty();
+  notifyBotReload(guildId);
   return NextResponse.json(rows[0], { status: 201 });
 }

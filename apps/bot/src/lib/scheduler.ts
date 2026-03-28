@@ -19,16 +19,11 @@ interface ScheduledMessageRow {
 
 interface TrackedJob {
   task: ScheduledTask;
-  updatedAt: Date;
-  cronExpression: string;
-  timezone: string;
+  schedule: ScheduledMessageRow; // cached content — no DB read on each fire
 }
-
-const DAILY_SYNC_MS = 86_400_000; // 24 hours
 
 export class SchedulerManager {
   private jobs = new Map<string, TrackedJob>();
-  private syncTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(
     private client: Client,
@@ -36,19 +31,9 @@ export class SchedulerManager {
     private logger: Logger,
   ) {}
 
-  /** Load all enabled schedules on startup and start hourly sync */
+  /** Load all enabled schedules on startup. Sync is triggered externally (e.g., by XP flush). */
   async loadAll(): Promise<void> {
     await this.reload();
-
-    // Daily background sync as a safety net
-    this.syncTimer = setInterval(async () => {
-      try {
-        this.logger.info("Daily schedule sync running");
-        await this.reload();
-      } catch (err) {
-        this.logger.error({ err }, "Daily schedule sync failed");
-      }
-    }, DAILY_SYNC_MS);
   }
 
   /** Full reload: sync in-memory jobs with the database. Called on startup and via /schedule reload */
@@ -73,9 +58,9 @@ export class SchedulerManager {
         this.addJob(schedule);
         added++;
       } else if (
-        existing.cronExpression !== schedule.cronExpression ||
-        existing.timezone !== schedule.timezone ||
-        existing.updatedAt.getTime() !== schedule.updatedAt.getTime()
+        existing.schedule.cronExpression !== schedule.cronExpression ||
+        existing.schedule.timezone !== schedule.timezone ||
+        existing.schedule.updatedAt.getTime() !== schedule.updatedAt.getTime()
       ) {
         this.addJob(schedule);
         updated++;
@@ -95,10 +80,11 @@ export class SchedulerManager {
     }
 
     const task = cron.schedule(schedule.cronExpression, async () => {
-      // Re-fetch from DB to get latest message content
-      const latest = await this.service.getById(schedule.id);
-      if (latest && latest.isEnabled) {
-        await this.executeJob(latest);
+      // Use cached schedule data — no DB read on each fire.
+      // Cache is refreshed on reload() (daily sync) and reloadJob() (after admin edits).
+      const cached = this.jobs.get(schedule.id);
+      if (cached && cached.schedule.isEnabled) {
+        await this.executeJob(cached.schedule);
       }
     }, {
       timezone: schedule.timezone,
@@ -106,9 +92,7 @@ export class SchedulerManager {
 
     this.jobs.set(schedule.id, {
       task,
-      updatedAt: schedule.updatedAt,
-      cronExpression: schedule.cronExpression,
-      timezone: schedule.timezone,
+      schedule,
     });
   }
 
@@ -130,12 +114,8 @@ export class SchedulerManager {
     }
   }
 
-  /** Stop all jobs and timers */
+  /** Stop all jobs */
   stopAll(): void {
-    if (this.syncTimer) {
-      clearInterval(this.syncTimer);
-      this.syncTimer = null;
-    }
     for (const [, job] of this.jobs) {
       job.task.stop();
     }
@@ -165,8 +145,11 @@ export class SchedulerManager {
         await textChannel.send(schedule.message);
       }
 
+      // Fire-and-forget lastRun update — don't block message sending on DB write
       const now = new Date();
-      await this.service.updateLastRun(schedule.id, now, null);
+      this.service.updateLastRun(schedule.id, now, null).catch((err) => {
+        log.warn({ err }, "Failed to update lastRun timestamp");
+      });
       log.info("Scheduled message sent");
     } catch (err) {
       log.error({ err }, "Failed to send scheduled message");
@@ -175,6 +158,12 @@ export class SchedulerManager {
 
   /** Send a scheduled message immediately (for testing/preview) */
   async testJob(scheduleId: string, guildId: string): Promise<boolean> {
+    // Use cached data if available, fall back to DB for uncached/disabled jobs
+    const cached = this.jobs.get(scheduleId);
+    if (cached && cached.schedule.guildId === guildId) {
+      await this.executeJob(cached.schedule);
+      return true;
+    }
     const schedule = await this.service.getById(scheduleId);
     if (!schedule || schedule.guildId !== guildId) return false;
     await this.executeJob(schedule);

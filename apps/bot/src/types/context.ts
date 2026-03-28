@@ -12,6 +12,7 @@ import type { ModerationService } from "../services/moderation.service.js";
 import type { LoggingService } from "../services/logging.service.js";
 import type { GuildAdminService } from "../services/guild-admin.service.js";
 import type { ScheduledMessageService } from "../services/scheduled-message.service.js";
+import type { XpService } from "../services/xp.service.js";
 import type { SchedulerManager } from "../lib/scheduler.js";
 
 export interface BotContext {
@@ -30,6 +31,7 @@ export interface BotContext {
     logging: LoggingService;
     guildAdmin: GuildAdminService;
     scheduledMessage: ScheduledMessageService;
+    xp: XpService;
   };
   scheduler?: SchedulerManager;
 }

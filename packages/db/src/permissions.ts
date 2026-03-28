@@ -7,6 +7,8 @@ export const PERMISSION_SCOPES = [
   "suggestions",
   "ai",
   "offtopic",
+  "xp",
+  "schedules",
   "managers",
   "*",
 ] as const;
@@ -68,4 +70,12 @@ export const FIELD_SCOPE_MAP: Record<string, PermissionScope> = {
   // Off-Topic
   offtopicImages: "offtopic",
   offtopicMessage: "offtopic",
+  // XP / Leveling
+  isXpEnabled: "xp",
+  xpMin: "xp",
+  xpMax: "xp",
+  xpCooldownSeconds: "xp",
+  xpLevelupChannelId: "xp",
+  xpExcludedChannelIds: "xp",
+  xpExcludedRoleIds: "xp",
 };

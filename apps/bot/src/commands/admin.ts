@@ -1,142 +1,22 @@
 import {
   SlashCommandBuilder,
   PermissionFlagsBits,
-  ChannelType,
   type ChatInputCommandInteraction,
-  type ModalSubmitInteraction,
-  ModalBuilder,
-  TextInputBuilder,
-  TextInputStyle,
-  ActionRowBuilder,
 } from "discord.js";
 import type { BotContext } from "../types/context.js";
 import type { BotCommand } from "../types/commands.js";
 import { AppError } from "../types/errors.js";
 import { successEmbed, errorEmbed, infoEmbed } from "../utils/embeds.js";
-import { SUBCOMMAND_SCOPE_MAP, PERMISSION_SCOPES } from "@dragonbot/db";
+import { PERMISSION_SCOPES } from "@dragonbot/db";
 
 const command: BotCommand = {
   ephemeral: true,
   data: new SlashCommandBuilder()
     .setName("admin")
-    .setDescription("Server configuration commands")
-    // Removed setDefaultMemberPermissions so custom guild admins can see the command
+    .setDescription("Server administration commands")
     .addSubcommand((sub) =>
       sub.setName("view-settings").setDescription("View all server settings"),
     )
-    .addSubcommand((sub) =>
-      sub
-        .setName("verification-role")
-        .setDescription("Set the role given on verification")
-        .addRoleOption((opt) => opt.setName("role").setDescription("Role to assign").setRequired(true)),
-    )
-    .addSubcommand((sub) =>
-      sub
-        .setName("verification-sync")
-        .setDescription("Toggle auto-verification on join")
-        .addBooleanOption((opt) => opt.setName("enabled").setDescription("Enable or disable").setRequired(true)),
-    )
-    .addSubcommand((sub) =>
-      sub
-        .setName("ban-sync")
-        .setDescription("Toggle cross-guild ban sync")
-        .addBooleanOption((opt) => opt.setName("enabled").setDescription("Enable or disable").setRequired(true)),
-    )
-    .addSubcommand((sub) =>
-      sub
-        .setName("welcome-message-toggle")
-        .setDescription("Toggle welcome messages")
-        .addBooleanOption((opt) => opt.setName("enabled").setDescription("Enable or disable").setRequired(true)),
-    )
-    .addSubcommand((sub) =>
-      sub
-        .setName("welcome-message")
-        .setDescription("Set welcome message ({member} and {server} are placeholders)")
-        .addStringOption((opt) => opt.setName("message").setDescription("Welcome message text").setRequired(true)),
-    )
-    .addSubcommand((sub) =>
-      sub
-        .setName("welcome-message-channel")
-        .setDescription("Set the welcome message channel")
-        .addChannelOption((opt) =>
-          opt.setName("channel").setDescription("Channel").setRequired(true).addChannelTypes(ChannelType.GuildText),
-        ),
-    )
-    .addSubcommand((sub) =>
-      sub
-        .setName("dm-message-toggle")
-        .setDescription("Toggle DM welcome messages")
-        .addBooleanOption((opt) => opt.setName("enabled").setDescription("Enable or disable").setRequired(true)),
-    )
-    .addSubcommand((sub) =>
-      sub.setName("dm-message").setDescription("Set DM welcome message (opens modal)"),
-    )
-    .addSubcommand((sub) =>
-      sub
-        .setName("log-channel")
-        .setDescription("Set the audit log channel")
-        .addChannelOption((opt) =>
-          opt.setName("channel").setDescription("Channel").setRequired(true).addChannelTypes(ChannelType.GuildText),
-        ),
-    )
-    .addSubcommand((sub) =>
-      sub
-        .setName("log-toggle")
-        .setDescription("Toggle audit logging")
-        .addBooleanOption((opt) => opt.setName("enabled").setDescription("Enable or disable").setRequired(true)),
-    )
-    .addSubcommand((sub) =>
-      sub
-        .setName("log-events")
-        .setDescription("Set which events to log (comma-separated)")
-        .addStringOption((opt) =>
-          opt
-            .setName("events")
-            .setDescription("e.g. member_join,member_leave,message_delete")
-            .setRequired(true),
-        ),
-    )
-    .addSubcommand((sub) =>
-      sub
-        .setName("intro-channel")
-        .setDescription("Set the introduction channel")
-        .addChannelOption((opt) =>
-          opt.setName("channel").setDescription("Channel").setRequired(true).addChannelTypes(ChannelType.GuildText),
-        ),
-    )
-    .addSubcommand((sub) =>
-      sub
-        .setName("intro-role")
-        .setDescription("Set the role given on valid introduction")
-        .addRoleOption((opt) => opt.setName("role").setDescription("Role").setRequired(true)),
-    )
-    .addSubcommand((sub) =>
-      sub
-        .setName("intro-toggle")
-        .setDescription("Toggle introduction gate")
-        .addBooleanOption((opt) => opt.setName("enabled").setDescription("Enable or disable").setRequired(true)),
-    )
-    .addSubcommand((sub) =>
-      sub
-        .setName("mod-notes-channel")
-        .setDescription("Set the mod notes channel")
-        .addChannelOption((opt) =>
-          opt.setName("channel").setDescription("Channel").setRequired(true).addChannelTypes(ChannelType.GuildText),
-        ),
-    )
-    .addSubcommand((sub) =>
-      sub
-        .setName("offtopic-message")
-        .setDescription("Set the off-topic response message")
-        .addStringOption((opt) => opt.setName("message").setDescription("Message text").setRequired(true)),
-    )
-    .addSubcommand((sub) =>
-      sub
-        .setName("ask-toggle")
-        .setDescription("Toggle AI /ask command")
-        .addBooleanOption((opt) => opt.setName("enabled").setDescription("Enable or disable").setRequired(true)),
-    )
-    // Manager subcommands
     .addSubcommand((sub) =>
       sub
         .setName("managers-add")
@@ -145,7 +25,7 @@ const command: BotCommand = {
         .addStringOption((opt) =>
           opt
             .setName("permissions")
-            .setDescription("Comma-separated scopes (e.g. verification,welcome,logging)")
+            .setDescription("Comma-separated scopes (e.g. verification,welcome,logging,xp)")
             .setRequired(true),
         ),
     )
@@ -166,12 +46,12 @@ const command: BotCommand = {
         .addStringOption((opt) =>
           opt
             .setName("permissions")
-            .setDescription("Comma-separated scopes (e.g. verification,welcome,logging)")
+            .setDescription("Comma-separated scopes (e.g. verification,welcome,logging,xp)")
             .setRequired(true),
         ),
     )
     .addSubcommand((sub) =>
-      sub.setName("reload").setDescription("Reload all caches and schedules (use after web dashboard changes)"),
+      sub.setName("reload").setDescription("Reload all caches and settings (use after web dashboard changes)"),
     ),
 
   async execute(interaction: ChatInputCommandInteraction, ctx: BotContext) {
@@ -191,39 +71,68 @@ const command: BotCommand = {
     const hasManageGuild = interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild) ?? false;
 
     if (!hasManageGuild) {
-      // Check custom guild_admins table
       const isManagerSub = sub.startsWith("managers-");
 
       if (isManagerSub) {
-        // Manager subcommands require "managers" scope
         const hasManagerPerm = await ctx.services.guildAdmin.hasPermission(guildId, userId, "managers");
         if (!hasManagerPerm) {
           await interaction.editReply({ embeds: [errorEmbed("You don't have permission to manage guild managers.")] });
           return;
         }
-      } else if (sub === "view-settings") {
-        // Any permission grants read access
+      } else if (sub === "view-settings" || sub === "reload") {
         const hasAny = await ctx.services.guildAdmin.hasAnyPermission(guildId, userId);
         if (!hasAny) {
-          await interaction.editReply({ embeds: [errorEmbed("You don't have permission to view server settings.")] });
-          return;
-        }
-      } else {
-        // Regular settings subcommands — check specific scope
-        const requiredScope = SUBCOMMAND_SCOPE_MAP[sub];
-        if (!requiredScope) {
-          await interaction.editReply({ embeds: [errorEmbed("Permission denied.")] });
-          return;
-        }
-
-        const hasPerm = await ctx.services.guildAdmin.hasPermission(guildId, userId, requiredScope);
-        if (!hasPerm) {
-          await interaction.editReply({
-            embeds: [errorEmbed(`You don't have the \`${requiredScope}\` permission to change this setting.`)],
-          });
+          await interaction.editReply({ embeds: [errorEmbed("You don't have permission.")] });
           return;
         }
       }
+    }
+
+    // --- View settings ---
+    if (sub === "view-settings") {
+      const settings = await ctx.services.guild.getSettings(guildId);
+      if (!settings) {
+        await interaction.editReply({ embeds: [errorEmbed("No settings found.")] });
+        return;
+      }
+
+      const lines = [
+        `**Verification Role:** ${settings.verificationRoleId ? `<@&${settings.verificationRoleId}>` : "Not set"}`,
+        `**Verification Sync:** ${settings.isVerificationSyncEnabled ? "Enabled" : "Disabled"}`,
+        `**Ban Sync:** ${settings.isBanSyncEnabled ? "Enabled" : "Disabled"}`,
+        `**Welcome:** ${settings.isWelcomeEnabled ? "Enabled" : "Disabled"} ${settings.welcomeChannelId ? `in <#${settings.welcomeChannelId}>` : ""}`,
+        `**DM Welcome:** ${settings.isDmWelcomeEnabled ? "Enabled" : "Disabled"}`,
+        `**Logging:** ${settings.isLoggingEnabled ? "Enabled" : "Disabled"} ${settings.logChannelId ? `in <#${settings.logChannelId}>` : ""}`,
+        `**Log Events:** ${settings.logEvents.length > 0 ? settings.logEvents.join(", ") : "None"}`,
+        `**Intro Gate:** ${settings.isIntroGateEnabled ? "Enabled" : "Disabled"} ${settings.introChannelId ? `in <#${settings.introChannelId}>` : ""}`,
+        `**Intro Role:** ${settings.introRoleId ? `<@&${settings.introRoleId}>` : "Not set"}`,
+        `**Mod Notes:** ${settings.modNotesChannelId ? `<#${settings.modNotesChannelId}>` : "Not set"}`,
+        `**Suggestions:** ${settings.isSuggestionsEnabled ? "Enabled" : "Disabled"}`,
+        `**AI Ask:** ${settings.isAskEnabled ? "Enabled" : "Disabled"}`,
+        `**XP:** ${settings.isXpEnabled ? "Enabled" : "Disabled"} (${settings.xpMin}–${settings.xpMax} XP, ${settings.xpCooldownSeconds}s cooldown)`,
+        "",
+        `*Use the [web dashboard](${ctx.config.WEBAPP_URL}) to edit settings.*`,
+      ];
+
+      await interaction.editReply({ embeds: [infoEmbed(lines.join("\n"))] });
+      return;
+    }
+
+    // --- Reload ---
+    if (sub === "reload") {
+      try {
+        await ctx.services.guild.hydrateAll();
+        if (ctx.scheduler) {
+          await ctx.scheduler.reload();
+        }
+        await interaction.editReply({
+          embeds: [successEmbed(`Settings and schedules reloaded! ${ctx.scheduler?.activeJobCount ?? 0} active schedule(s).`)],
+        });
+      } catch (err) {
+        ctx.logger.error({ err }, "Failed to reload");
+        await interaction.editReply({ embeds: [errorEmbed("Failed to reload. Check logs.")] });
+      }
+      return;
     }
 
     // --- Manager subcommands ---
@@ -232,7 +141,15 @@ const command: BotCommand = {
       const permStr = interaction.options.getString("permissions", true);
       const permissions = permStr.split(",").map((p) => p.trim().toLowerCase());
 
-      // If the caller is a custom admin (not MANAGE_GUILD), they can only grant scopes they have
+      // Validate permission names
+      const invalidPerms = permissions.filter((p) => !(PERMISSION_SCOPES as readonly string[]).includes(p));
+      if (invalidPerms.length > 0) {
+        await interaction.editReply({
+          embeds: [errorEmbed(`Invalid permissions: \`${invalidPerms.join(", ")}\`\nValid: \`${PERMISSION_SCOPES.join(", ")}\``)],
+        });
+        return;
+      }
+
       if (!hasManageGuild) {
         const callerPerms = await ctx.services.guildAdmin.getPermissions(guildId, userId);
         if (!callerPerms.includes("*")) {
@@ -253,7 +170,7 @@ const command: BotCommand = {
         });
       } catch (err) {
         if (err instanceof AppError) {
-          await interaction.reply({ embeds: [errorEmbed(err.message)], ephemeral: true });
+          await interaction.editReply({ embeds: [errorEmbed(err.message)] });
           return;
         }
         throw err;
@@ -270,7 +187,7 @@ const command: BotCommand = {
         });
       } catch (err) {
         if (err instanceof AppError) {
-          await interaction.reply({ embeds: [errorEmbed(err.message)], ephemeral: true });
+          await interaction.editReply({ embeds: [errorEmbed(err.message)] });
           return;
         }
         throw err;
@@ -299,7 +216,14 @@ const command: BotCommand = {
       const permStr = interaction.options.getString("permissions", true);
       const permissions = permStr.split(",").map((p) => p.trim().toLowerCase());
 
-      // Same delegation check as managers-add
+      const invalidPerms = permissions.filter((p) => !(PERMISSION_SCOPES as readonly string[]).includes(p));
+      if (invalidPerms.length > 0) {
+        await interaction.editReply({
+          embeds: [errorEmbed(`Invalid permissions: \`${invalidPerms.join(", ")}\`\nValid: \`${PERMISSION_SCOPES.join(", ")}\``)],
+        });
+        return;
+      }
+
       if (!hasManageGuild) {
         const callerPerms = await ctx.services.guildAdmin.getPermissions(guildId, userId);
         if (!callerPerms.includes("*")) {
@@ -320,135 +244,12 @@ const command: BotCommand = {
         });
       } catch (err) {
         if (err instanceof AppError) {
-          await interaction.reply({ embeds: [errorEmbed(err.message)], ephemeral: true });
+          await interaction.editReply({ embeds: [errorEmbed(err.message)] });
           return;
         }
         throw err;
       }
       return;
-    }
-
-    if (sub === "reload") {
-      try {
-        // Clear all in-memory caches
-        ctx.services.guild.invalidateCache(guildId);
-        // Reload scheduled messages
-        if (ctx.scheduler) {
-          await ctx.scheduler.reload();
-        }
-        await interaction.editReply({
-          embeds: [successEmbed(`Caches cleared and schedules reloaded! ${ctx.scheduler?.activeJobCount ?? 0} active job(s).`)],
-        });
-      } catch (err) {
-        ctx.logger.error({ err }, "Failed to reload");
-        await interaction.editReply({ embeds: [errorEmbed("Failed to reload. Check logs.")] });
-      }
-      return;
-    }
-
-    // --- Existing settings subcommands ---
-    if (sub === "view-settings") {
-      const settings = await ctx.services.guild.getSettings(guildId);
-      if (!settings) {
-        await interaction.editReply({ embeds: [errorEmbed("No settings found.")] });
-        return;
-      }
-
-      const lines = [
-        `**Verification Role:** ${settings.verificationRoleId ? `<@&${settings.verificationRoleId}>` : "Not set"}`,
-        `**Verification Sync:** ${settings.isVerificationSyncEnabled ? "Enabled" : "Disabled"}`,
-        `**Ban Sync:** ${settings.isBanSyncEnabled ? "Enabled" : "Disabled"}`,
-        `**Welcome:** ${settings.isWelcomeEnabled ? "Enabled" : "Disabled"} ${settings.welcomeChannelId ? `in <#${settings.welcomeChannelId}>` : ""}`,
-        `**DM Welcome:** ${settings.isDmWelcomeEnabled ? "Enabled" : "Disabled"}`,
-        `**Logging:** ${settings.isLoggingEnabled ? "Enabled" : "Disabled"} ${settings.logChannelId ? `in <#${settings.logChannelId}>` : ""}`,
-        `**Log Events:** ${settings.logEvents.length > 0 ? settings.logEvents.join(", ") : "None"}`,
-        `**Intro Gate:** ${settings.isIntroGateEnabled ? "Enabled" : "Disabled"} ${settings.introChannelId ? `in <#${settings.introChannelId}>` : ""}`,
-        `**Intro Role:** ${settings.introRoleId ? `<@&${settings.introRoleId}>` : "Not set"}`,
-        `**Mod Notes:** ${settings.modNotesChannelId ? `<#${settings.modNotesChannelId}>` : "Not set"}`,
-        `**Suggestions:** ${settings.isSuggestionsEnabled ? "Enabled" : "Disabled"}`,
-        `**AI Ask:** ${settings.isAskEnabled ? "Enabled" : "Disabled"}`,
-      ];
-
-      await interaction.editReply({ embeds: [infoEmbed(lines.join("\n"))] });
-      return;
-    }
-
-    if (sub === "dm-message") {
-      const modal = new ModalBuilder()
-        .setCustomId("admin:dm-message")
-        .setTitle("DM Welcome Message")
-        .addComponents(
-          new ActionRowBuilder<TextInputBuilder>().addComponents(
-            new TextInputBuilder()
-              .setCustomId("message")
-              .setLabel("DM Welcome Message")
-              .setStyle(TextInputStyle.Paragraph)
-              .setPlaceholder("Welcome to {server}! Please introduce yourself.")
-              .setRequired(true),
-          ),
-        );
-      await interaction.showModal(modal);
-      return;
-    }
-
-    // All other subcommands update a setting
-    const settingsMap: Record<string, () => Partial<Record<string, unknown>>> = {
-      "verification-role": () => ({ verificationRoleId: interaction.options.getRole("role", true).id }),
-      "verification-sync": () => ({ isVerificationSyncEnabled: interaction.options.getBoolean("enabled", true) }),
-      "ban-sync": () => ({ isBanSyncEnabled: interaction.options.getBoolean("enabled", true) }),
-      "welcome-message-toggle": () => ({ isWelcomeEnabled: interaction.options.getBoolean("enabled", true) }),
-      "welcome-message": () => ({ welcomeMessage: interaction.options.getString("message", true) }),
-      "welcome-message-channel": () => ({ welcomeChannelId: interaction.options.getChannel("channel", true).id }),
-      "dm-message-toggle": () => ({ isDmWelcomeEnabled: interaction.options.getBoolean("enabled", true) }),
-      "log-channel": () => ({ logChannelId: interaction.options.getChannel("channel", true).id }),
-      "log-toggle": () => ({ isLoggingEnabled: interaction.options.getBoolean("enabled", true) }),
-      "log-events": () => {
-        const VALID_EVENTS = ["member_join", "member_leave", "message_delete", "message_edit", "role_change", "nickname_change", "voice_activity", "kick", "ban"];
-        const events = interaction.options
-          .getString("events", true)
-          .split(",")
-          .map((e) => e.trim().toLowerCase())
-          .filter((e) => VALID_EVENTS.includes(e));
-        return { logEvents: events };
-      },
-      "intro-channel": () => ({ introChannelId: interaction.options.getChannel("channel", true).id }),
-      "intro-role": () => ({ introRoleId: interaction.options.getRole("role", true).id }),
-      "intro-toggle": () => ({ isIntroGateEnabled: interaction.options.getBoolean("enabled", true) }),
-      "mod-notes-channel": () => ({ modNotesChannelId: interaction.options.getChannel("channel", true).id }),
-      "offtopic-message": () => ({ offtopicMessage: interaction.options.getString("message", true) }),
-      "ask-toggle": () => ({ isAskEnabled: interaction.options.getBoolean("enabled", true) }),
-    };
-
-    const getSettings = settingsMap[sub];
-    if (!getSettings) {
-      await interaction.editReply({ embeds: [errorEmbed("Unknown subcommand.")] });
-      return;
-    }
-
-    await ctx.services.guild.updateSettings(guildId, getSettings() as Record<string, unknown>);
-    await interaction.editReply({ embeds: [successEmbed("Setting updated!")] });
-  },
-
-  async modal(interaction: ModalSubmitInteraction, ctx: BotContext) {
-    if (interaction.customId === "admin:dm-message") {
-      if (!interaction.guildId) {
-        await interaction.reply({ embeds: [errorEmbed("This can only be used in a server.")], ephemeral: true });
-        return;
-      }
-
-      // Re-verify permissions (user may have lost access since opening the modal)
-      const hasManageGuild = interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild) ?? false;
-      if (!hasManageGuild) {
-        const hasPerm = await ctx.services.guildAdmin.hasPermission(interaction.guildId, interaction.user.id, "welcome");
-        if (!hasPerm) {
-          await interaction.reply({ embeds: [errorEmbed("You no longer have permission to change this setting.")], ephemeral: true });
-          return;
-        }
-      }
-
-      const message = interaction.fields.getTextInputValue("message");
-      await ctx.services.guild.updateSettings(interaction.guildId, { dmWelcomeMessage: message });
-      await interaction.reply({ embeds: [successEmbed("DM welcome message updated!")], ephemeral: true });
     }
   },
 };

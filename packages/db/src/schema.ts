@@ -7,6 +7,7 @@ import {
   integer,
   unique,
   uuid,
+  index,
 } from "drizzle-orm/pg-core";
 
 export const users = pgTable("users", {
@@ -80,6 +81,15 @@ export const guilds = pgTable("guilds", {
   offtopicImages: text("offtopic_images").array().notNull().default([]),
   offtopicMessage: text("offtopic_message"),
 
+  // XP / Leveling
+  isXpEnabled: boolean("is_xp_enabled").notNull().default(false),
+  xpMin: integer("xp_min").notNull().default(15),
+  xpMax: integer("xp_max").notNull().default(25),
+  xpCooldownSeconds: integer("xp_cooldown_seconds").notNull().default(60),
+  xpLevelupChannelId: varchar("xp_levelup_channel_id", { length: 20 }),
+  xpExcludedChannelIds: text("xp_excluded_channel_ids").array().notNull().default([]),
+  xpExcludedRoleIds: text("xp_excluded_role_ids").array().notNull().default([]),
+
   // Meta
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),
@@ -93,7 +103,10 @@ export const verifications = pgTable("verifications", {
   code: varchar("code", { length: 6 }).notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
-});
+}, (table) => [
+  index("verif_discord_guild_idx").on(table.discordId, table.guildId),
+  index("verif_expires_idx").on(table.expiresAt),
+]);
 
 export const suggestions = pgTable("suggestions", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -103,7 +116,9 @@ export const suggestions = pgTable("suggestions", {
   suggestion: text("suggestion").notNull(),
   status: text("status").notNull().default("pending"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-});
+}, (table) => [
+  index("suggestions_guild_idx").on(table.guildId),
+]);
 
 export const guildAdmins = pgTable("guild_admins", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -150,4 +165,21 @@ export const authTokens = pgTable("auth_tokens", {
   used: boolean("used").notNull().default(false),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
-});
+}, (table) => [
+  index("auth_tokens_token_idx").on(table.token),
+]);
+
+export const userXp = pgTable("user_xp", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  guildId: varchar("guild_id", { length: 20 }).notNull(),
+  discordId: varchar("discord_id", { length: 20 }).notNull(),
+  totalXp: integer("total_xp").notNull().default(0),
+  level: integer("level").notNull().default(0),
+  messageCount: integer("message_count").notNull().default(0),
+  xpMessageCount: integer("xp_message_count").notNull().default(0),
+  lastMessageAt: timestamp("last_message_at", { withTimezone: true }),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),
+}, (table) => [
+  unique("user_xp_guild_id_discord_id_unique").on(table.guildId, table.discordId),
+  index("user_xp_leaderboard_idx").on(table.guildId, table.totalXp),
+]);

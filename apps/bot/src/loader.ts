@@ -72,10 +72,16 @@ export async function loadEvents(
       continue;
     }
 
+    const safeHandler = (...args: unknown[]) => {
+      Promise.resolve(event.execute(...args, ctx)).catch((err) => {
+        logger.error({ err, event: event.name }, "Unhandled error in event handler");
+      });
+    };
+
     if (event.once) {
-      client.once(event.name, (...args: unknown[]) => event.execute(...args, ctx));
+      client.once(event.name, safeHandler);
     } else {
-      client.on(event.name, (...args: unknown[]) => event.execute(...args, ctx));
+      client.on(event.name, safeHandler);
     }
 
     logger.info({ event: event.name, once: event.once ?? false }, "Loaded event");
@@ -118,8 +124,9 @@ export function bindInteractionHandler(
       }
     } else if (interaction.isModalSubmit()) {
       // Modal IDs are formatted as "commandName:action"
-      const commandName = interaction.customId.split(":")[0];
-      const command = commands.get(commandName!);
+      const commandName = interaction.customId.split(":")[0] ?? "";
+      if (!commandName) return;
+      const command = commands.get(commandName);
       if (!command?.modal) return;
 
       try {

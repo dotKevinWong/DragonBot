@@ -7,10 +7,20 @@ export class GuildService {
 
   constructor(private repo: GuildRepository) {}
 
+  /** Load ALL guild settings into cache at startup. After this, getSettings() never hits DB. */
+  async hydrateAll(): Promise<number> {
+    const allGuilds = await this.repo.findAll();
+    for (const guild of allGuilds) {
+      this.cache.set(guild.guildId, guild);
+    }
+    return allGuilds.length;
+  }
+
   async getSettings(guildId: string) {
     const cached = this.cache.get(guildId);
     if (cached !== undefined) return cached;
 
+    // Fallback to DB only if not hydrated yet (e.g., during startup race)
     const settings = await this.repo.findByGuildId(guildId);
     if (settings) {
       this.cache.set(guildId, settings);

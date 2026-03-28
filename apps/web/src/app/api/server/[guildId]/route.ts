@@ -4,7 +4,8 @@ import { guilds, FIELD_SCOPE_MAP } from "@dragonbot/db";
 import { db } from "@/lib/db";
 import { getAuthenticatedUser } from "@/lib/auth";
 import { checkGuildPermission, getUserGuildPermissions } from "@/lib/discord";
-import { guildSettingsUpdateSchema } from "@/lib/validators";
+import { guildSettingsUpdateSchema, DISCORD_SNOWFLAKE_RE } from "@/lib/validators";
+import { notifyBotReload } from "@/lib/bot-webhook";
 
 export async function GET(
   request: Request,
@@ -16,6 +17,10 @@ export async function GET(
   }
 
   const { guildId } = await params;
+
+  if (!DISCORD_SNOWFLAKE_RE.test(guildId)) {
+    return NextResponse.json({ error: "Server not found", code: "NOT_FOUND" }, { status: 404 });
+  }
 
   // Any guild permission grants read access
   const hasPermission = await checkGuildPermission(guildId, discordId);
@@ -44,6 +49,10 @@ export async function PATCH(
   }
 
   const { guildId } = await params;
+
+  if (!DISCORD_SNOWFLAKE_RE.test(guildId)) {
+    return NextResponse.json({ error: "Server not found", code: "NOT_FOUND" }, { status: 404 });
+  }
 
   // Get the user's permission scopes
   const userPermissions = await getUserGuildPermissions(guildId, discordId);
@@ -87,6 +96,21 @@ export async function PATCH(
     }
   }
 
+  // Cross-validate xpMin/xpMax against existing DB values when only one is provided
+  if (parsed.data.xpMin !== undefined || parsed.data.xpMax !== undefined) {
+    const existing = await db.select({ xpMin: guilds.xpMin, xpMax: guilds.xpMax }).from(guilds).where(eq(guilds.guildId, guildId)).limit(1);
+    if (existing[0]) {
+      const effectiveMin = parsed.data.xpMin ?? existing[0].xpMin;
+      const effectiveMax = parsed.data.xpMax ?? existing[0].xpMax;
+      if (effectiveMin > effectiveMax) {
+        return NextResponse.json(
+          { error: "xpMin cannot be greater than xpMax", code: "VALIDATION_ERROR" },
+          { status: 400 },
+        );
+      }
+    }
+  }
+
   const rows = await db
     .update(guilds)
     .set({ ...parsed.data, updatedAt: new Date() })
@@ -96,6 +120,9 @@ export async function PATCH(
   if (rows.length === 0) {
     return NextResponse.json({ error: "Server not found", code: "NOT_FOUND" }, { status: 404 });
   }
+
+  // Notify bot to reload this guild's cached settings instantly
+  notifyBotReload(guildId);
 
   const { id: _id2, ...safeUpdated } = rows[0]!;
   return NextResponse.json(safeUpdated);

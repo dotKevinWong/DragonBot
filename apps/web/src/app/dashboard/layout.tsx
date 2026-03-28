@@ -8,6 +8,7 @@ interface GuildInfo {
   guildId: string;
   guildName: string | null;
   iconUrl: string | null;
+  isAdmin: boolean;
 }
 
 interface UserInfo {
@@ -104,6 +105,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           const isGuildActive = pathname.startsWith(`/dashboard/server/${guild.guildId}`);
           const isSettings = pathname === `/dashboard/server/${guild.guildId}`;
           const isSchedules = pathname === `/dashboard/server/${guild.guildId}/schedules`;
+          const isLeaderboard = pathname === `/dashboard/server/${guild.guildId}/leaderboard`;
           return (
             <div key={guild.guildId} className="mt-0.5">
               <a
@@ -119,25 +121,39 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               </a>
               {isGuildActive && (
                 <div className="mt-1 ml-4 border-l-2 border-dc-border pl-3 space-y-0.5">
+                  {guild.isAdmin && (
+                    <>
+                      <a
+                        href={`/dashboard/server/${guild.guildId}`}
+                        className={`block px-3 py-1.5 rounded-md text-sm transition-colors ${
+                          isSettings
+                            ? "text-dc-text-primary bg-dc-bg-modifier"
+                            : "text-dc-text-muted hover:text-dc-text-secondary hover:bg-dc-bg-modifier/50"
+                        }`}
+                      >
+                        Settings
+                      </a>
+                      <a
+                        href={`/dashboard/server/${guild.guildId}/schedules`}
+                        className={`block px-3 py-1.5 rounded-md text-sm transition-colors ${
+                          isSchedules
+                            ? "text-dc-text-primary bg-dc-bg-modifier"
+                            : "text-dc-text-muted hover:text-dc-text-secondary hover:bg-dc-bg-modifier/50"
+                        }`}
+                      >
+                        Schedules
+                      </a>
+                    </>
+                  )}
                   <a
-                    href={`/dashboard/server/${guild.guildId}`}
+                    href={`/dashboard/server/${guild.guildId}/leaderboard`}
                     className={`block px-3 py-1.5 rounded-md text-sm transition-colors ${
-                      isSettings
+                      isLeaderboard
                         ? "text-dc-text-primary bg-dc-bg-modifier"
                         : "text-dc-text-muted hover:text-dc-text-secondary hover:bg-dc-bg-modifier/50"
                     }`}
                   >
-                    Settings
-                  </a>
-                  <a
-                    href={`/dashboard/server/${guild.guildId}/schedules`}
-                    className={`block px-3 py-1.5 rounded-md text-sm transition-colors ${
-                      isSchedules
-                        ? "text-dc-text-primary bg-dc-bg-modifier"
-                        : "text-dc-text-muted hover:text-dc-text-secondary hover:bg-dc-bg-modifier/50"
-                    }`}
-                  >
-                    Schedules
+                    Leaderboard
                   </a>
                 </div>
               )}

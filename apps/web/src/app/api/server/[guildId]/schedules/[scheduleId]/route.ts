@@ -5,20 +5,20 @@ import { db } from "@/lib/db";
 import { getAuthenticatedUser } from "@/lib/auth";
 import { checkGuildPermission } from "@/lib/discord";
 import { z } from "zod";
-import { markSchedulesDirty } from "@/lib/sync";
+import { notifyBotReload } from "@/lib/bot-webhook";
+import { cronExpressionSchema, embedColorSchema, DISCORD_SNOWFLAKE_RE } from "@/lib/validators";
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const updateSchema = z.object({
-  channelId: z.string().max(20).min(1).optional(),
-  message: z.string().max(4000).min(1).optional(),
-  cronExpression: z.string().max(100).min(1).regex(
-    /^[\d*\/,-]+\s+[\d*\/,-]+\s+[\d*\/,-]+\s+[\d*\/,-]+\s+[\d*\/,-]+$/,
-    "Invalid cron expression format (expected 5 fields)",
-  ).optional(),
+  channelId: z.string().regex(DISCORD_SNOWFLAKE_RE, "Invalid channel ID").optional(),
+  message: z.string().trim().max(4000).min(1).optional(),
+  cronExpression: cronExpressionSchema.optional(),
   timezone: z.string().max(50).optional(),
   isEnabled: z.boolean().optional(),
   isEmbed: z.boolean().optional(),
-  embedColor: z.string().max(7).nullable().optional(),
-  embedTitle: z.string().max(256).nullable().optional(),
+  embedColor: embedColorSchema,
+  embedTitle: z.string().trim().max(256).nullable().optional(),
 });
 
 export async function PATCH(
@@ -31,6 +31,10 @@ export async function PATCH(
   }
 
   const { guildId, scheduleId } = await params;
+
+  if (!DISCORD_SNOWFLAKE_RE.test(guildId) || !UUID_RE.test(scheduleId)) {
+    return NextResponse.json({ error: "Not found", code: "NOT_FOUND" }, { status: 404 });
+  }
 
   const hasPermission = await checkGuildPermission(guildId, discordId);
   if (!hasPermission) {
@@ -56,7 +60,7 @@ export async function PATCH(
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
-  await markSchedulesDirty();
+  notifyBotReload(guildId);
   return NextResponse.json(rows[0]);
 }
 
@@ -70,6 +74,10 @@ export async function DELETE(
   }
 
   const { guildId, scheduleId } = await params;
+
+  if (!DISCORD_SNOWFLAKE_RE.test(guildId) || !UUID_RE.test(scheduleId)) {
+    return NextResponse.json({ error: "Not found", code: "NOT_FOUND" }, { status: 404 });
+  }
 
   const hasPermission = await checkGuildPermission(guildId, discordId);
   if (!hasPermission) {
@@ -85,6 +93,6 @@ export async function DELETE(
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
-  await markSchedulesDirty();
+  notifyBotReload(guildId);
   return NextResponse.json({ success: true });
 }

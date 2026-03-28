@@ -6,7 +6,7 @@
 
 DragonBot is a multi-guild Discord bot for university communities. It provides email verification, moderation tools, user profiles, AI Q&A, scheduled messages, audit logging, and a Next.js web dashboard.
 
-**Key design constraint:** The bot is fully configurable per-guild. There are zero hardcoded guild, channel, or role IDs anywhere in the codebase. All server-specific settings live in the `guilds` database table and are managed via `/admin` commands or the web dashboard.
+**Key design constraint:** The bot is fully configurable per-guild. There are zero hardcoded guild, channel, or role IDs anywhere in the codebase. All server-specific settings live in the `guilds` database table and are managed exclusively via the **web dashboard**. Bot commands are read-only or operational — they do not modify guild settings.
 
 ## Tech Stack
 
@@ -86,8 +86,9 @@ interface BotContext {
     logging: LoggingService;
     guildAdmin: GuildAdminService;
     scheduledMessage: ScheduledMessageService;
+    xp: XpService;
   };
-  scheduler?: SchedulerManager;
+  scheduler?: SchedulerManager;   // present after startup, absent during early init
 }
 ```
 
@@ -96,12 +97,16 @@ interface BotContext {
 ```typescript
 interface BotCommand {
   data: SlashCommandBuilder;
+  ephemeral?: boolean;            // if true, loader defers with ephemeral=true
+  skipDefer?: boolean;            // if true, loader skips auto-defer entirely
   execute(interaction: ChatInputCommandInteraction, ctx: BotContext): Promise<void>;
   modal?(interaction: ModalSubmitInteraction, ctx: BotContext): Promise<void>;
 }
 ```
 
 Commands are auto-loaded from `src/commands/` at startup. The loader reads every `.ts` file, registers slash commands with Discord, and binds the interaction handler.
+
+**Auto-defer pattern:** The loader always calls `interaction.deferReply()` before `execute()` (with `ephemeral: true` if the command sets that flag), unless `skipDefer: true`. This means handlers must **always** use `interaction.editReply()`, never `interaction.reply()`. Using `reply()` after an auto-defer causes a Discord `InteractionAlreadyReplied` error.
 
 ### Event Interface
 
@@ -138,9 +143,10 @@ PostgreSQL on Neon. Schema defined in `packages/db/src/schema.ts`. Both apps imp
 - **guild_admins** — Custom per-guild manager permissions with granular scopes
 - **scheduled_messages** — Recurring automated messages with cron expressions
 - **verifications** — Temporary email verification codes (6-char alphanumeric, 30-min expiry)
-- **suggestions** — Feature suggestions with status tracking
-- **sync_flags** — Lightweight flags for web→bot communication
+- **suggestions** — Feature suggestions with status tracking (`pending` → `approved`/`rejected`/`completed`)
+- **sync_flags** — Internal key/value dirty flags (legacy; cache invalidation now uses the webhook server)
 - **auth_tokens** — One-time tokens for web login (64-char, 5-min expiry, single-use)
+- **user_xp** — Per-guild XP data: `total_xp`, `level`, `message_count`, `xp_message_count`, `last_message_at`. Unique on `(guild_id, discord_id)`.
 
 ### Key Patterns
 
@@ -166,6 +172,7 @@ PostgreSQL on Neon. Schema defined in `packages/db/src/schema.ts`. Both apps imp
 | Suggestions | `is_suggestions_enabled` |
 | AI / Ask | `is_ask_enabled`, `ask_system_prompt` |
 | Off-Topic | `offtopic_images`, `offtopic_message` |
+| XP / Leveling | `is_xp_enabled`, `xp_min`, `xp_max`, `xp_cooldown_seconds`, `xp_levelup_channel_id`, `xp_excluded_channel_ids[]`, `xp_excluded_role_ids[]` |
 
 When a setting is null or a feature toggle is false, the feature is simply inactive — no errors, no fallback.
 
@@ -173,7 +180,7 @@ When a setting is null or a feature toggle is false, the feature is simply inact
 
 The `guild_admins` table provides granular permissions for users who don't have Discord's MANAGE_GUILD permission. Available scopes:
 
-`verification`, `welcome`, `logging`, `intro_gate`, `moderation`, `suggestions`, `ai`, `offtopic`, `managers`, `*` (wildcard)
+`verification`, `welcome`, `logging`, `intro_gate`, `moderation`, `suggestions`, `ai`, `offtopic`, `xp`, `schedules`, `managers`, `*` (wildcard)
 
 Discord MANAGE_GUILD always grants full access. The `guild_admins` table is additive.
 
@@ -188,9 +195,14 @@ DATABASE_URL=             # Neon connection string
 RESEND_API_KEY=           # Resend API key
 RESEND_FROM_EMAIL=        # Sender address for verification emails
 OPENAI_API_KEY=           # OpenAI key
-OPENAI_MODEL=gpt-4o-mini  # Default model
+OPENAI_MODEL=gpt-5-mini   # Default model
 WEBAPP_URL=               # e.g. https://app.drexeldiscord.com
 JWT_SECRET=               # HMAC secret for signing JWTs
+BOT_WEBHOOK_SECRET=       # Shared secret for webhook auth (min 16 chars, optional)
+BOT_WEBHOOK_PORT=3001     # Port for the bot's webhook HTTP server (default: 3001)
+
+# Web (additional)
+BOT_WEBHOOK_URL=          # URL to bot's webhook server, e.g. http://localhost:3001
 ```
 
 All validated with zod at startup. Missing required vars cause an immediate exit with a clear error.
@@ -216,8 +228,12 @@ All routes validate input with zod. All return `{ error, code }` on failure.
 - `GET /api/server/[guildId]` — guild settings
 - `PATCH /api/server/[guildId]` — update guild settings (scope-aware permission check)
 - `GET /api/server/[guildId]/discord` — fetch Discord channels and roles for the guild
+- `GET /api/server/[guildId]/leaderboard` — XP leaderboard from DB (paginated, admin auth)
 - `GET/POST /api/server/[guildId]/schedules` — list/create scheduled messages
 - `PATCH/DELETE /api/server/[guildId]/schedules/[scheduleId]` — update/delete a schedule
+- `GET /api/leaderboard/[guildId]` — public XP leaderboard (no auth required)
+
+All `[guildId]` path params are validated against `/^[0-9]{17,20}$/` before any DB access. Schedule `[scheduleId]` is validated as a UUID.
 
 ### Web UI Features
 
@@ -238,13 +254,23 @@ The web app uses lazy proxies for `env` and `db` to avoid build-time errors (Ver
 
 ## Bot Features
 
+### XP / Leveling
+
+MEE6-style XP with in-memory caching to minimize DB writes (Neon charges for compute time).
+
+- **Startup:** `XpService` hydrates all `user_xp` rows into memory
+- **Message XP:** Random XP per message (`xp_min`–`xp_max`), per-user cooldown, excluded channels/roles. All in-memory — zero DB writes per message.
+- **Level-up:** Announces in `xp_levelup_channel_id` if set
+- **`/rank`, `/leaderboard`:** Served entirely from memory
+- **4-hour flush:** Batch-upserts dirty entries to DB; skipped if nothing changed. Uses `isFlushing` guard + sets `lastFlushAt` synchronously before the async call to prevent races.
+- **Graceful shutdown:** SIGTERM/SIGINT handlers flush before exit
+
 ### Scheduled Messages
 
 - `node-cron` manages in-memory cron jobs
 - On startup: loads all enabled schedules from DB
-- Hourly background sync as safety net
-- `/schedule reload` command for immediate sync after web dashboard changes
-- Supports plain text and embed messages
+- **Webhook-triggered reload:** The web dashboard calls `POST /webhook/reload?guildId=<id>` on the bot's webhook server (port 3001) after any schedule change; bot calls `scheduler.reload(guildId)` immediately. **`BOT_WEBHOOK_URL` must point to port 3001, not 3000 (Next.js).**
+- Supports plain text and embed messages (color, title)
 
 ### Audit Logging
 
@@ -283,6 +309,7 @@ Config files: `railway.json`, `vercel.json`
 - Every service method that can fail throws `AppError` with a specific `ErrorCode`
 - Logging: pino only — never `console.log`, `console.error`, or `console.warn`
 - Tests live in `tests/` mirroring `src/` structure, named `*.test.ts`
+- **Always use `interaction.editReply()`** in command handlers — never `interaction.reply()` — because the loader auto-defers all interactions before calling `execute()`. Exception: commands with `skipDefer: true` must use `interaction.reply()` instead since no defer has occurred.
 
 ## How to Add a New Feature
 

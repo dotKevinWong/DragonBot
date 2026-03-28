@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useRef, useCallback } from "react";
+import { useEffect, useState, useRef, useCallback, useMemo } from "react";
 import { useParams } from "next/navigation";
 
 interface GuildSettings {
@@ -28,6 +28,13 @@ interface GuildSettings {
   askSystemPrompt: string | null;
   offtopicImages: string[];
   offtopicMessage: string | null;
+  isXpEnabled: boolean;
+  xpMin: number;
+  xpMax: number;
+  xpCooldownSeconds: number;
+  xpLevelupChannelId: string | null;
+  xpExcludedChannelIds: string[];
+  xpExcludedRoleIds: string[];
 }
 
 interface DiscordChannel {
@@ -412,6 +419,37 @@ function TagInput({ values, onChange, placeholder }: { values: string[]; onChang
   );
 }
 
+function MultiSelect({ items, selected, onChange }: {
+  items: { id: string; label: string }[];
+  selected: string[];
+  onChange: (v: string[]) => void;
+}) {
+  function toggle(id: string) {
+    if (selected.includes(id)) onChange(selected.filter((s) => s !== id));
+    else onChange([...selected, id]);
+  }
+
+  return (
+    <div className="flex flex-wrap gap-1.5 p-2 bg-dc-input border border-dc-border rounded-md min-h-[38px]">
+      {items.map((item) => (
+        <button
+          key={item.id}
+          type="button"
+          onClick={() => toggle(item.id)}
+          className={`px-2.5 py-1 rounded text-xs font-medium transition-colors cursor-pointer ${
+            selected.includes(item.id)
+              ? "bg-dc-accent/20 text-dc-accent border border-dc-accent/40"
+              : "bg-dc-bg-tertiary text-dc-text-muted border border-dc-border hover:border-dc-text-muted"
+          }`}
+        >
+          {item.label}
+        </button>
+      ))}
+      {items.length === 0 && <span className="text-xs text-dc-text-muted">No items available</span>}
+    </div>
+  );
+}
+
 function EventPicker({ selected, onChange }: { selected: string[]; onChange: (v: string[]) => void }) {
   function toggle(opt: string) {
     if (selected.includes(opt)) onChange(selected.filter((s) => s !== opt));
@@ -453,6 +491,7 @@ export default function ServerSettingsPage() {
   const params = useParams();
   const guildId = params.guildId as string;
   const [settings, setSettings] = useState<GuildSettings | null>(null);
+  const [savedSettings, setSavedSettings] = useState<GuildSettings | null>(null);
   const [channels, setChannels] = useState<DiscordChannel[]>([]);
   const [roles, setRoles] = useState<DiscordRole[]>([]);
   const [loading, setLoading] = useState(true);
@@ -460,6 +499,11 @@ export default function ServerSettingsPage() {
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [hasDiscordData, setHasDiscordData] = useState(false);
+
+  const isDirty = useMemo(() => {
+    if (!settings || !savedSettings) return false;
+    return JSON.stringify(settings) !== JSON.stringify(savedSettings);
+  }, [settings, savedSettings]);
 
   useEffect(() => {
     Promise.all([
@@ -472,6 +516,7 @@ export default function ServerSettingsPage() {
 
         const settingsData = await settingsRes.json();
         setSettings(settingsData);
+        setSavedSettings(settingsData);
 
         if (discordRes.ok) {
           const discordData = await discordRes.json();
@@ -514,6 +559,12 @@ export default function ServerSettingsPage() {
       askSystemPrompt: settings.askSystemPrompt,
       offtopicImages: settings.offtopicImages,
       offtopicMessage: settings.offtopicMessage,
+      isXpEnabled: settings.isXpEnabled,
+      xpMin: settings.xpMin,
+      xpMax: settings.xpMax,
+      xpCooldownSeconds: settings.xpCooldownSeconds,
+      xpExcludedChannelIds: settings.xpExcludedChannelIds,
+      xpExcludedRoleIds: settings.xpExcludedRoleIds,
     };
 
     // Only include role/channel IDs if we successfully loaded Discord data
@@ -525,6 +576,7 @@ export default function ServerSettingsPage() {
       updateFields.introChannelId = settings.introChannelId;
       updateFields.introRoleId = settings.introRoleId;
       updateFields.modNotesChannelId = settings.modNotesChannelId;
+      updateFields.xpLevelupChannelId = settings.xpLevelupChannelId;
     }
 
     const res = await fetch(`/api/server/${guildId}`, {
@@ -537,6 +589,7 @@ export default function ServerSettingsPage() {
     if (res.ok) {
       const data = await res.json();
       setSettings(data);
+      setSavedSettings(data);
       setMessage({ type: "success", text: "Settings saved!" });
     } else {
       const data = await res.json();
@@ -571,7 +624,7 @@ export default function ServerSettingsPage() {
         </div>
         <button
           onClick={handleSave}
-          disabled={saving}
+          disabled={saving || !isDirty}
           className="px-4 py-2 bg-dc-accent hover:bg-dc-accent-hover disabled:opacity-50 text-white text-sm font-medium rounded-md transition-colors cursor-pointer disabled:cursor-not-allowed"
         >
           {saving ? "Saving..." : "Save Changes"}
@@ -677,6 +730,62 @@ export default function ServerSettingsPage() {
           <TagInput values={settings.offtopicImages} onChange={(v) => update("offtopicImages", v)} placeholder="Paste image URL and press Enter" />
         </div>
       </Section>
+
+      <Section title="XP / Leveling">
+        <Toggle label="Enable XP system" checked={settings.isXpEnabled} onChange={(v) => update("isXpEnabled", v)} />
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div>
+            <label className="block text-xs font-semibold text-dc-text-secondary uppercase tracking-wide mb-1.5">Min XP per Message</label>
+            <input type="number" className="w-full px-3 py-2 bg-dc-input border border-dc-border rounded-md text-dc-text-primary text-sm outline-none focus:border-dc-accent transition-colors" value={settings.xpMin} onChange={(e) => update("xpMin", parseInt(e.target.value) || 1)} min={1} max={1000} />
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-dc-text-secondary uppercase tracking-wide mb-1.5">Max XP per Message</label>
+            <input type="number" className="w-full px-3 py-2 bg-dc-input border border-dc-border rounded-md text-dc-text-primary text-sm outline-none focus:border-dc-accent transition-colors" value={settings.xpMax} onChange={(e) => update("xpMax", parseInt(e.target.value) || 1)} min={1} max={1000} />
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-dc-text-secondary uppercase tracking-wide mb-1.5">Cooldown (seconds)</label>
+            <input type="number" className="w-full px-3 py-2 bg-dc-input border border-dc-border rounded-md text-dc-text-primary text-sm outline-none focus:border-dc-accent transition-colors" value={settings.xpCooldownSeconds} onChange={(e) => update("xpCooldownSeconds", parseInt(e.target.value) || 0)} min={0} max={3600} />
+          </div>
+        </div>
+        <ChannelSelect label="Level-up Announcement Channel" value={settings.xpLevelupChannelId} onChange={(v) => update("xpLevelupChannelId", v)} channels={channels} filterType="text" />
+        <div>
+          <label className="block text-xs font-semibold text-dc-text-secondary uppercase tracking-wide mb-1.5">Excluded Channels (no XP earned)</label>
+          <MultiSelect
+            items={channels.filter((c) => c.type === "text" || c.type === "announcement").map((c) => ({ id: c.id, label: `# ${c.name}` }))}
+            selected={settings.xpExcludedChannelIds}
+            onChange={(v) => update("xpExcludedChannelIds", v)}
+          />
+        </div>
+        <div>
+          <label className="block text-xs font-semibold text-dc-text-secondary uppercase tracking-wide mb-1.5">Excluded Roles (no XP earned)</label>
+          <MultiSelect
+            items={roles.map((r) => ({ id: r.id, label: `@ ${r.name}` }))}
+            selected={settings.xpExcludedRoleIds}
+            onChange={(v) => update("xpExcludedRoleIds", v)}
+          />
+        </div>
+      </Section>
+
+      {/* Sticky unsaved changes banner */}
+      {isDirty && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-4 bg-dc-bg-tertiary border border-dc-border rounded-lg px-5 py-3 shadow-xl">
+          <span className="text-sm text-dc-text-primary">Careful — you have unsaved changes!</span>
+          <button
+            type="button"
+            onClick={() => { setSettings(savedSettings); setMessage(null); }}
+            className="text-sm text-dc-text-secondary hover:text-dc-text-primary transition-colors cursor-pointer"
+          >
+            Reset
+          </button>
+          <button
+            onClick={handleSave}
+            disabled={saving}
+            className="px-4 py-2 bg-dc-success hover:bg-dc-success/80 disabled:opacity-50 text-white text-sm font-medium rounded-md transition-colors cursor-pointer disabled:cursor-not-allowed"
+          >
+            {saving ? "Saving..." : "Save Changes"}
+          </button>
+        </div>
+      )}
 
     </div>
   );

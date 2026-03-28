@@ -54,8 +54,12 @@ const command: BotCommand = {
           iconURL: interaction.user.displayAvatarURL(),
         });
 
+      if (!channel?.isTextBased()) {
+        await interaction.reply({ embeds: [errorEmbed("That channel is not a text channel.")], ephemeral: true });
+        return;
+      }
       await channel.send({ embeds: [embed] });
-      await interaction.editReply({ embeds: [successEmbed("Announcement sent!")] });
+      await interaction.reply({ embeds: [successEmbed("Announcement sent!")], ephemeral: true });
     } else if (sub === "react") {
       const messageId = interaction.options.getString("message_id", true);
       const emote = interaction.options.getString("emote", true);
@@ -64,7 +68,7 @@ const command: BotCommand = {
         const channel = interaction.channel as TextChannel;
         const message = await channel.messages.fetch(messageId);
         await message.react(emote);
-        await interaction.editReply({ embeds: [successEmbed("Reaction added!")] });
+        await interaction.reply({ embeds: [successEmbed("Reaction added!")], ephemeral: true });
       } catch (err) {
         ctx.logger.warn({ err }, "Failed to add reaction");
         await interaction.reply({ embeds: [errorEmbed("Failed to add reaction. Check the message ID and emoji.")], ephemeral: true });

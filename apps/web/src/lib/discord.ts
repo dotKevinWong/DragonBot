@@ -161,3 +161,46 @@ export async function getUserGuildPermissions(
     return [];
   }
 }
+
+/** Simple in-memory cache for Discord user lookups (10 min TTL, prevents N+1 API abuse). */
+const userCache = new Map<string, { data: { username: string; displayName: string; avatarUrl: string | null } | null; expiresAt: number }>();
+const USER_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+
+/** Resolve a Discord user ID to display name + avatar. Cached for 10 minutes. */
+export async function resolveDiscordUser(userId: string): Promise<{ username: string; displayName: string; avatarUrl: string | null } | null> {
+  const cached = userCache.get(userId);
+  if (cached && Date.now() < cached.expiresAt) return cached.data;
+
+  try {
+    const res = await fetch(`https://discord.com/api/v10/users/${userId}`, {
+      headers: { Authorization: `Bot ${env.DISCORD_API_TOKEN}` },
+    });
+    if (!res.ok) {
+      userCache.set(userId, { data: null, expiresAt: Date.now() + USER_CACHE_TTL_MS });
+      return null;
+    }
+    const user = await res.json() as { id: string; username: string; global_name: string | null; avatar: string | null };
+    const data = {
+      username: user.username,
+      displayName: user.global_name ?? user.username,
+      avatarUrl: user.avatar ? `https://cdn.discordapp.com/avatars/${user.id}/${user.avatar}.png?size=64` : null,
+    };
+    userCache.set(userId, { data, expiresAt: Date.now() + USER_CACHE_TTL_MS });
+    return data;
+  } catch {
+    return null;
+  }
+}
+
+/** Check if a user is a member of a guild (regardless of permissions). */
+export async function isGuildMember(guildId: string, userId: string): Promise<boolean> {
+  try {
+    const res = await fetch(
+      `https://discord.com/api/v10/guilds/${guildId}/members/${userId}`,
+      { headers: { Authorization: `Bot ${env.DISCORD_API_TOKEN}` } },
+    );
+    return res.ok;
+  } catch {
+    return false;
+  }
+}

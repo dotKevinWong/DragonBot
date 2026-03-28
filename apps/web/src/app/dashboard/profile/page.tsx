@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 
 interface Profile {
   name: string | null;
@@ -101,9 +101,15 @@ function Select({
 
 export default function ProfilePage() {
   const [profile, setProfile] = useState<Profile | null>(null);
+  const [savedProfile, setSavedProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+
+  const isDirty = useMemo(() => {
+    if (!profile || !savedProfile) return false;
+    return JSON.stringify(profile) !== JSON.stringify(savedProfile);
+  }, [profile, savedProfile]);
 
   useEffect(() => {
     fetch("/api/profile", { credentials: "same-origin" })
@@ -115,7 +121,7 @@ export default function ProfilePage() {
         return res.json();
       })
       .then((data) => {
-        if (data) setProfile(data);
+        if (data) { setProfile(data); setSavedProfile(data); }
         setLoading(false);
       })
       .catch(() => setLoading(false));
@@ -136,6 +142,8 @@ export default function ProfilePage() {
     });
 
     if (res.ok) {
+      const data = await res.json();
+      setSavedProfile(data);
       setMessage({ type: "success", text: "Profile saved!" });
     } else {
       const data = await res.json();
@@ -183,7 +191,7 @@ export default function ProfilePage() {
         </div>
         <button
           onClick={handleSave}
-          disabled={saving}
+          disabled={saving || !isDirty}
           className="px-4 py-2 bg-dc-accent hover:bg-dc-accent-hover disabled:opacity-50 text-white text-sm font-medium rounded-md transition-colors cursor-pointer disabled:cursor-not-allowed"
         >
           {saving ? "Saving..." : "Save Changes"}
@@ -238,6 +246,27 @@ export default function ProfilePage() {
           <Input label="Co-op 3" value={profile.coop3 ?? ""} onChange={(v) => update("coop3", v || null)} />
         </div>
       </div>
+
+      {/* Sticky unsaved changes banner */}
+      {isDirty && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-4 bg-dc-bg-tertiary border border-dc-border rounded-lg px-5 py-3 shadow-xl">
+          <span className="text-sm text-dc-text-primary">Careful — you have unsaved changes!</span>
+          <button
+            type="button"
+            onClick={() => { setProfile(savedProfile); setMessage(null); }}
+            className="text-sm text-dc-text-secondary hover:text-dc-text-primary transition-colors cursor-pointer"
+          >
+            Reset
+          </button>
+          <button
+            onClick={handleSave}
+            disabled={saving}
+            className="px-4 py-2 bg-dc-success hover:bg-dc-success/80 disabled:opacity-50 text-white text-sm font-medium rounded-md transition-colors cursor-pointer disabled:cursor-not-allowed"
+          >
+            {saving ? "Saving..." : "Save Changes"}
+          </button>
+        </div>
+      )}
 
     </div>
   );

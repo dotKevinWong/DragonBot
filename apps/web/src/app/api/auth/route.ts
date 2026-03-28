@@ -2,9 +2,8 @@ import { NextResponse } from "next/server";
 import { eq, and, lt, gt } from "drizzle-orm";
 import { authTokens } from "@dragonbot/db/schema";
 import { db } from "@/lib/db";
-import { signJwt, getDiscordIdFromRequest, getJwtPayloadFromRequest, createSessionCookie, clearSessionCookie } from "@/lib/auth";
+import { signJwt, getAuthenticatedUser, getDiscordIdFromRequest, createSessionCookie, clearSessionCookie } from "@/lib/auth";
 import { getDiscordUser } from "@/lib/discord";
-import { users } from "@dragonbot/db/schema";
 
 export async function POST(request: Request) {
   try {
@@ -33,7 +32,7 @@ export async function POST(request: Request) {
     }
 
     // Sign JWT and set as httpOnly cookie
-    const jwt = signJwt(record.discordId);
+    const jwt = await signJwt(record.discordId);
     const response = NextResponse.json({ discord_id: record.discordId });
     response.headers.set("Set-Cookie", createSessionCookie(jwt));
 
@@ -50,30 +49,10 @@ export async function POST(request: Request) {
 }
 
 export async function GET(request: Request) {
-  const discordId = getDiscordIdFromRequest(request);
+  // getAuthenticatedUser handles both JWT verification AND revocation check
+  const discordId = await getAuthenticatedUser(request);
   if (!discordId) {
     return NextResponse.json({ error: "Unauthorized", code: "UNAUTHORIZED" }, { status: 401 });
-  }
-
-  // Check JWT revocation
-  const jwtPayload = getJwtPayloadFromRequest(request);
-  if (jwtPayload) {
-    const userRows = await db
-      .select({ jwtInvalidBefore: users.jwtInvalidBefore })
-      .from(users)
-      .where(eq(users.discordId, discordId))
-      .limit(1);
-
-    const user = userRows[0];
-    if (user?.jwtInvalidBefore) {
-      const issuedAt = new Date(jwtPayload.iat * 1000);
-      if (issuedAt < user.jwtInvalidBefore) {
-        // JWT was issued before revocation — clear cookie and reject
-        const response = NextResponse.json({ error: "Session revoked", code: "UNAUTHORIZED" }, { status: 401 });
-        response.headers.set("Set-Cookie", clearSessionCookie());
-        return response;
-      }
-    }
   }
 
   const discordUser = await getDiscordUser(discordId);
@@ -87,7 +66,7 @@ export async function GET(request: Request) {
 
 /** DELETE /api/auth — clear session cookie (logout) */
 export async function DELETE(request: Request) {
-  const discordId = getDiscordIdFromRequest(request);
+  const discordId = await getDiscordIdFromRequest(request);
   if (!discordId) {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
   }

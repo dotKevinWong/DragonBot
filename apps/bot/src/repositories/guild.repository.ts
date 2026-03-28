@@ -35,6 +35,10 @@ export class GuildRepository {
     return rows[0] ?? null;
   }
 
+  async findAll() {
+    return this.db.select().from(guilds);
+  }
+
   async findAllWithBanSync() {
     return this.db
       .select()

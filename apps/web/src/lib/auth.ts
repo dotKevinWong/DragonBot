@@ -1,4 +1,4 @@
-import crypto from "node:crypto";
+import { SignJWT, jwtVerify } from "jose";
 import { env } from "./env";
 
 interface JwtPayload {
@@ -9,54 +9,37 @@ interface JwtPayload {
 
 const COOKIE_NAME = "dragonbot_session";
 const JWT_EXPIRY_SECONDS = 24 * 60 * 60; // 24 hours
+const secret = new TextEncoder().encode(env.JWT_SECRET);
 
-export function verifyJwt(token: string): JwtPayload | null {
-  const parts = token.split(".");
-  if (parts.length !== 3) return null;
-
-  const [header, payload, signature] = parts;
-
-  const expectedSignature = crypto
-    .createHmac("sha256", env.JWT_SECRET)
-    .update(`${header}.${payload}`)
-    .digest("base64url");
-
+export async function verifyJwt(token: string): Promise<JwtPayload | null> {
   try {
-    if (!crypto.timingSafeEqual(Buffer.from(signature!, "base64url"), Buffer.from(expectedSignature, "base64url"))) return null;
+    const { payload } = await jwtVerify(token, secret, {
+      algorithms: ["HS256"],
+    });
+    const discordId = payload.discord_id as string | undefined;
+    if (!discordId) return null;
+    return {
+      discord_id: discordId,
+      iat: payload.iat ?? 0,
+      exp: payload.exp ?? 0,
+    };
   } catch {
-    return null;
-  }
-
-  try {
-    const decoded = JSON.parse(Buffer.from(payload!, "base64url").toString()) as JwtPayload;
-    if (!decoded.discord_id || !decoded.exp || decoded.exp < Math.floor(Date.now() / 1000)) return null;
-    return decoded;
-  } catch {
+    // Covers expired, invalid signature, malformed, wrong algorithm
     return null;
   }
 }
 
-export function signJwt(discordId: string): string {
-  const header = Buffer.from(JSON.stringify({ alg: "HS256", typ: "JWT" })).toString("base64url");
-  const payload = Buffer.from(
-    JSON.stringify({
-      discord_id: discordId,
-      iat: Math.floor(Date.now() / 1000),
-      exp: Math.floor(Date.now() / 1000) + JWT_EXPIRY_SECONDS,
-    }),
-  ).toString("base64url");
-
-  const signature = crypto
-    .createHmac("sha256", env.JWT_SECRET)
-    .update(`${header}.${payload}`)
-    .digest("base64url");
-
-  return `${header}.${payload}.${signature}`;
+export async function signJwt(discordId: string): Promise<string> {
+  return new SignJWT({ discord_id: discordId })
+    .setProtectedHeader({ alg: "HS256" })
+    .setIssuedAt()
+    .setExpirationTime(`${JWT_EXPIRY_SECONDS}s`)
+    .sign(secret);
 }
 
 /** Extract discord_id from the request — checks httpOnly cookie first, then Authorization header.
- *  Note: This does NOT check jwtInvalidBefore — call checkJwtRevocation separately for protected routes. */
-export function getDiscordIdFromRequest(request: Request): string | null {
+ *  Note: This does NOT check jwtInvalidBefore — call getAuthenticatedUser for protected routes. */
+export async function getDiscordIdFromRequest(request: Request): Promise<string | null> {
   // 1. Check httpOnly cookie
   const cookieHeader = request.headers.get("cookie");
   if (cookieHeader) {
@@ -68,7 +51,7 @@ export function getDiscordIdFromRequest(request: Request): string | null {
     );
     const sessionToken = cookies[COOKIE_NAME];
     if (sessionToken) {
-      const payload = verifyJwt(sessionToken);
+      const payload = await verifyJwt(sessionToken);
       if (payload) return payload.discord_id;
     }
   }
@@ -77,7 +60,7 @@ export function getDiscordIdFromRequest(request: Request): string | null {
   const authHeader = request.headers.get("Authorization");
   if (authHeader?.startsWith("Bearer ")) {
     const token = authHeader.slice(7);
-    const payload = verifyJwt(token);
+    const payload = await verifyJwt(token);
     return payload?.discord_id ?? null;
   }
 
@@ -85,7 +68,7 @@ export function getDiscordIdFromRequest(request: Request): string | null {
 }
 
 /** Get the JWT payload (iat) from the request for revocation checking */
-export function getJwtPayloadFromRequest(request: Request): JwtPayload | null {
+async function getJwtPayloadFromRequest(request: Request): Promise<JwtPayload | null> {
   const cookieHeader = request.headers.get("cookie");
   if (cookieHeader) {
     const cookies = Object.fromEntries(
@@ -112,7 +95,7 @@ export function getJwtPayloadFromRequest(request: Request): JwtPayload | null {
  * Returns discord_id if valid, null if unauthorized or revoked.
  */
 export async function getAuthenticatedUser(request: Request): Promise<string | null> {
-  const payload = getJwtPayloadFromRequest(request);
+  const payload = await getJwtPayloadFromRequest(request);
   if (!payload) return null;
 
   // Lazy import to avoid circular deps
@@ -127,7 +110,10 @@ export async function getAuthenticatedUser(request: Request): Promise<string | n
     .limit(1);
 
   const user = rows[0];
-  if (user?.jwtInvalidBefore) {
+  // No user row → JWT is for a non-existent/deleted user
+  if (!user) return null;
+
+  if (user.jwtInvalidBefore) {
     const issuedAt = new Date(payload.iat * 1000);
     if (issuedAt < user.jwtInvalidBefore) return null;
   }

@@ -26,7 +26,10 @@ import { LoggingService } from "./services/logging.service.js";
 import { GuildAdminService } from "./services/guild-admin.service.js";
 import { ScheduledMessageRepository } from "./repositories/scheduled-message.repository.js";
 import { ScheduledMessageService } from "./services/scheduled-message.service.js";
+import { XpRepository } from "./repositories/xp.repository.js";
+import { XpService } from "./services/xp.service.js";
 import { SchedulerManager } from "./lib/scheduler.js";
+import { startWebhookServer } from "./lib/webhook-server.js";
 import {
   loadCommands,
   registerCommands,
@@ -64,10 +67,12 @@ async function main() {
   const authService = new AuthService(authRepo, config.JWT_SECRET);
   const suggestionService = new SuggestionService(suggestionRepo, guildRepo);
   const moderationService = new ModerationService(guildRepo, userRepo);
-  const loggingService = new LoggingService(guildRepo);
+  const loggingService = new LoggingService(guildService);
   const guildAdminService = new GuildAdminService(guildAdminRepo);
   const scheduledMessageRepo = new ScheduledMessageRepository(db);
   const scheduledMessageService = new ScheduledMessageService(scheduledMessageRepo);
+  const xpRepo = new XpRepository(db);
+  const xpService = new XpService(xpRepo, logger);
 
   // 6. Context
   const ctx: BotContext = {
@@ -86,6 +91,7 @@ async function main() {
       logging: loggingService,
       guildAdmin: guildAdminService,
       scheduledMessage: scheduledMessageService,
+      xp: xpService,
     },
   };
 
@@ -101,18 +107,98 @@ async function main() {
   await loadEvents(eventsDir, client, ctx, logger);
   bindInteractionHandler(client, commands, ctx);
 
-  // 9. Ready event + scheduler
+  // 9. Ready event + scheduler + XP hydration
   client.once("clientReady", async (c) => {
     logger.info({ user: c.user.tag, guilds: c.guilds.cache.size }, "Bot is online");
+
+    // Hydrate guild settings into memory (eliminates DB reads during normal operation)
+    const guildCount = await guildService.hydrateAll();
+    logger.info({ guildCount }, "Guild settings hydrated");
+
+    // Hydrate XP data into memory
+    await xpService.hydrate();
 
     // Start scheduled message cron jobs
     const scheduler = new SchedulerManager(client, scheduledMessageService, logger);
     await scheduler.loadAll();
     ctx.scheduler = scheduler;
+
+    // Start webhook server for instant cache invalidation from web dashboard
+    if (config.BOT_WEBHOOK_SECRET) {
+      startWebhookServer({
+        port: config.BOT_WEBHOOK_PORT,
+        secret: config.BOT_WEBHOOK_SECRET,
+        guildService,
+        logger,
+        getScheduler: () => ctx.scheduler,
+      });
+    }
+
+    // Start 4-hour combined sync timer: flush XP + reload schedules in one DB connection window
+    const FOUR_HOURS_MS = 4 * 60 * 60 * 1000;
+    const syncTimer = setInterval(async () => {
+      try {
+        await xpService.flush();
+        await guildService.hydrateAll();
+        await scheduler.reload();
+        logger.info("Periodic sync complete (XP flush + guild settings + schedule reload)");
+      } catch (err) {
+        logger.error({ err }, "Periodic sync failed");
+      }
+    }, FOUR_HOURS_MS);
+    if (syncTimer.unref) syncTimer.unref();
   });
 
   // 10. Login
   await client.login(config.DISCORD_API_TOKEN);
+
+  // 11. Graceful shutdown + crash handlers
+  let isShuttingDown = false;
+  const shutdown = (signal: string) => {
+    if (isShuttingDown) return;
+    isShuttingDown = true;
+    logger.info({ signal }, "Shutting down...");
+
+    // Race the flush against a timeout — tsx/turborepo may kill us quickly
+    const timeout = setTimeout(() => {
+      logger.warn("XP flush timed out — exiting without flush");
+      process.exit(1);
+    }, 8000);
+    timeout.unref();
+
+    xpService.flush()
+      .then(() => {
+        logger.info("XP data flushed to database");
+        process.exit(0);
+      })
+      .catch((err) => {
+        logger.error({ err }, "Failed to flush XP during shutdown");
+        process.exit(1);
+      });
+  };
+
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
+  process.on("SIGINT", () => shutdown("SIGINT"));
+
+  process.on("uncaughtException", async (err) => {
+    logger.fatal({ err }, "Uncaught exception — flushing XP before exit");
+    try {
+      await xpService.flush();
+    } catch (flushErr) {
+      logger.error({ err: flushErr }, "Failed to flush XP during crash");
+    }
+    process.exit(1);
+  });
+
+  process.on("unhandledRejection", async (reason) => {
+    logger.fatal({ reason }, "Unhandled rejection — flushing XP before exit");
+    try {
+      await xpService.flush();
+    } catch (flushErr) {
+      logger.error({ err: flushErr }, "Failed to flush XP during crash");
+    }
+    process.exit(1);
+  });
 }
 
 main().catch((err) => {

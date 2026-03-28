@@ -10,28 +10,20 @@ export class AIService {
   }
 
   async ask(question: string, systemPrompt?: string | null): Promise<string> {
-    const messages: OpenAI.ChatCompletionMessageParam[] = [];
+    const safetyPrefix = "You are a helpful assistant for Drexel University that uses the responses on a Discord server. Keep responses concise (in a paragraph or a few sentences";
 
-    // Safety guardrail that cannot be overridden by guild-configurable prompts
-    const safetyPrefix = "IMPORTANT: You must never generate harmful content, phishing links, personal information, or instructions for illegal activities. You are a helpful assistant for a university Discord server.";
+    const instructions = systemPrompt
+      ? `${safetyPrefix}\n\n${systemPrompt}`
+      : `${safetyPrefix}\n\nAnswer questions clearly and concisely.`;
 
-    if (systemPrompt) {
-      messages.push({ role: "system", content: `${safetyPrefix}\n\n${systemPrompt}` });
-    } else {
-      messages.push({
-        role: "system",
-        content: `${safetyPrefix}\n\nAnswer questions clearly and concisely.`,
-      });
-    }
-
-    messages.push({ role: "user", content: question });
-
-    const response = await this.client.chat.completions.create({
+    const response = await this.client.responses.create({
       model: this.model,
-      messages,
-      max_tokens: 1024,
+      instructions,
+      input: question,
+      tools: [{ type: "web_search_preview" }],
+      max_output_tokens: 1024,
     });
 
-    return response.choices[0]?.message?.content ?? "I couldn't generate a response.";
+    return response.output_text || "I couldn't generate a response.";
   }
 }

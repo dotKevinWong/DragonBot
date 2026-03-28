@@ -98,11 +98,11 @@ const command: BotCommand = {
       }
     } catch (err) {
       if (err instanceof AppError) {
-        await interaction.reply({ embeds: [errorEmbed(err.message)], ephemeral: true });
+        await interaction.editReply({ embeds: [errorEmbed(err.message)] });
         return;
       }
       log.error({ err }, "Unhandled error in /verify");
-      await interaction.reply({ embeds: [errorEmbed("Something went wrong.")], ephemeral: true });
+      await interaction.editReply({ embeds: [errorEmbed("Something went wrong.")] });
     }
   },
 };

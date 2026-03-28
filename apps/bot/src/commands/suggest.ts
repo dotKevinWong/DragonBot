@@ -50,11 +50,11 @@ const command: BotCommand = {
       }
     } catch (err) {
       if (err instanceof AppError) {
-        await interaction.reply({ embeds: [errorEmbed(err.message)], ephemeral: true });
+        await interaction.editReply({ embeds: [errorEmbed(err.message)] });
         return;
       }
       ctx.logger.error({ err }, "Error in /suggest");
-      await interaction.reply({ embeds: [errorEmbed("Something went wrong.")], ephemeral: true });
+      await interaction.editReply({ embeds: [errorEmbed("Something went wrong.")] });
     }
   },
 };

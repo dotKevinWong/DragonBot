@@ -37,7 +37,7 @@ const command: BotCommand = {
       });
     } catch (err) {
       ctx.logger.error({ err }, "Error in /login");
-      await interaction.reply({ embeds: [errorEmbed("Something went wrong.")], ephemeral: true });
+      await interaction.editReply({ embeds: [errorEmbed("Something went wrong.")] });
     }
   },
 };

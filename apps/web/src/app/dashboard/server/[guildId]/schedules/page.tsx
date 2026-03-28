@@ -248,10 +248,10 @@ export default function SchedulesPage() {
       )}
 
       {showReloadHint && (
-        <div className="px-4 py-3 rounded-md mb-6 text-sm bg-dc-warning/10 border border-dc-warning/30 text-dc-warning flex items-start gap-2">
-          <span className="shrink-0 mt-0.5">⚠️</span>
+        <div className="px-4 py-3 rounded-md mb-6 text-sm bg-dc-success/10 border border-dc-success/30 text-dc-success flex items-start gap-2">
+          <span className="shrink-0 mt-0.5">✓</span>
           <div>
-            <p>Run <code className="bg-dc-bg-tertiary px-1.5 py-0.5 rounded text-xs">/admin reload</code> in Discord to apply these changes to the bot.</p>
+            <p>Changes saved and synced to the bot.</p>
             <button onClick={() => setShowReloadHint(false)} className="text-xs text-dc-text-muted hover:text-dc-text-secondary mt-1 cursor-pointer">Dismiss</button>
           </div>
         </div>
@@ -402,7 +402,7 @@ export default function SchedulesPage() {
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
                     <label className="block text-xs font-semibold text-dc-text-secondary uppercase tracking-wide mb-1.5">Cron Expression</label>
-                    <select className="w-full px-3 py-2 bg-dc-input border border-dc-border rounded-md text-dc-text-primary text-sm outline-none focus:border-dc-accent cursor-pointer" value={PRESET_INTERVALS.some((p) => p.cron === editData.cronExpression) ? editData.cronExpression : "custom"} onChange={(e) => { if (e.target.value !== "custom") setEditData({ ...editData, cronExpression: e.target.value }); }}>
+                    <select className="w-full px-3 py-2 bg-dc-input border border-dc-border rounded-md text-dc-text-primary text-sm outline-none focus:border-dc-accent cursor-pointer" value={PRESET_INTERVALS.some((p) => p.cron === editData.cronExpression) ? editData.cronExpression : "custom"} onChange={(e) => { if (e.target.value === "custom") { setEditData({ ...editData, cronExpression: "" }); } else { setEditData({ ...editData, cronExpression: e.target.value }); } }}>
                       {PRESET_INTERVALS.map((p) => (<option key={p.cron} value={p.cron}>{p.label}</option>))}
                       <option value="custom">Custom cron...</option>
                     </select>

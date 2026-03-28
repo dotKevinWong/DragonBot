@@ -75,9 +75,12 @@ scripts/           — Migration and utility scripts
    RESEND_API_KEY=
    RESEND_FROM_EMAIL=
    OPENAI_API_KEY=
-   OPENAI_MODEL=gpt-4o-mini
+   OPENAI_MODEL=gpt-5-mini
    WEBAPP_URL=http://localhost:3000
    JWT_SECRET=          # Generate with: openssl rand -hex 32
+   BOT_WEBHOOK_SECRET=      # Generate with: openssl rand -hex 32
+   BOT_WEBHOOK_URL=        # Public URL for bot webhook (e.g. https://myapp.up.railway.app/webhook)
+   BOT_WEBHOOK_PORT=      # Port for bot webhook server (e.g. 3001)
    ```
 
 4. **Push the database schema**
@@ -124,8 +127,12 @@ See the deployment configs: `railway.json` and `vercel.json`.
 | `/suggest` | Submit a feature suggestion |
 | `/admin` | Server configuration (19+ settings) |
 | `/schedule` | Manage scheduled messages |
+| `/rank [@user]` | View your XP rank |
+| `/leaderboard` | View XP leaderboard |
+| `/offtopic` | Random off-topic image/message |
 | `/mod talk` | Send an announcement |
 | `/mod react` | React to a message |
+| `/xp-admin` | XP system management (admin) |
 | `/membercount` | Server member statistics |
 | `/roll` | Roll a d20 |
 | `/latex` | Render LaTeX to image |
