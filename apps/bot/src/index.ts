@@ -154,31 +154,33 @@ async function main() {
 
   // 11. Graceful shutdown + crash handlers
   let isShuttingDown = false;
-  const shutdown = (signal: string) => {
+  const shutdown = async (signal: string) => {
     if (isShuttingDown) return;
     isShuttingDown = true;
     logger.info({ signal }, "Shutting down...");
 
-    // Race the flush against a timeout — tsx/turborepo may kill us quickly
-    const timeout = setTimeout(() => {
-      logger.warn("XP flush timed out — exiting without flush");
+    // Keep event loop alive with a ref'd timer as a hard deadline
+    const deadline = setTimeout(() => {
+      logger.warn("Shutdown timed out — exiting without flush");
       process.exit(1);
     }, 8000);
-    timeout.unref();
 
-    xpService.flush()
-      .then(() => {
-        logger.info("XP data flushed to database");
-        process.exit(0);
-      })
-      .catch((err) => {
-        logger.error({ err }, "Failed to flush XP during shutdown");
-        process.exit(1);
-      });
+    try {
+      // Disconnect from Discord first to stop receiving new events
+      client.destroy();
+      // Flush XP to database
+      await xpService.flush();
+      logger.info("XP data flushed to database");
+    } catch (err) {
+      logger.error({ err }, "Failed to flush XP during shutdown");
+    } finally {
+      clearTimeout(deadline);
+      process.exit(0);
+    }
   };
 
-  process.on("SIGTERM", () => shutdown("SIGTERM"));
-  process.on("SIGINT", () => shutdown("SIGINT"));
+  process.on("SIGTERM", () => { shutdown("SIGTERM"); });
+  process.on("SIGINT", () => { shutdown("SIGINT"); });
 
   process.on("uncaughtException", async (err) => {
     logger.fatal({ err }, "Uncaught exception — flushing XP before exit");
