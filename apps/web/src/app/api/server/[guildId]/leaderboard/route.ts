@@ -3,7 +3,7 @@ import { eq, desc } from "drizzle-orm";
 import { userXp } from "@dragonbot/db";
 import { db } from "@/lib/db";
 import { getAuthenticatedUser } from "@/lib/auth";
-import { checkGuildPermission, resolveDiscordUser } from "@/lib/discord";
+import { isGuildMember, resolveDiscordUser } from "@/lib/discord";
 import { DISCORD_SNOWFLAKE_RE } from "@/lib/validators";
 
 export async function GET(
@@ -21,8 +21,9 @@ export async function GET(
     return NextResponse.json({ error: "Not found", code: "NOT_FOUND" }, { status: 404 });
   }
 
-  const hasAccess = await checkGuildPermission(guildId, discordId);
-  if (!hasAccess) {
+  // Any guild member can view the leaderboard (not just admins)
+  const isMember = await isGuildMember(guildId, discordId);
+  if (!isMember) {
     return NextResponse.json({ error: "Forbidden", code: "FORBIDDEN" }, { status: 403 });
   }
 

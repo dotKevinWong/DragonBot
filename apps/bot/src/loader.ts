@@ -3,6 +3,7 @@ import { pathToFileURL } from "node:url";
 import path from "node:path";
 import {
   Collection,
+  MessageFlags,
   REST,
   Routes,
   type Client,
@@ -107,14 +108,14 @@ export function bindInteractionHandler(
       try {
         // Auto-defer to prevent Discord's 3-second timeout on slow DB/API calls
         if (!command.skipDefer) {
-          await interaction.deferReply({ ephemeral: command.ephemeral ?? false });
+          await interaction.deferReply(command.ephemeral ? { flags: MessageFlags.Ephemeral } : {});
         }
         await command.execute(interaction as ChatInputCommandInteraction, ctx);
       } catch (err) {
         log.error({ err }, "Unhandled error in command");
         const reply = {
           content: "Something went wrong. Please try again later.",
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral as number,
         };
         if (interaction.replied || interaction.deferred) {
           await interaction.followUp(reply).catch(() => {});

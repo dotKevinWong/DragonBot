@@ -1,6 +1,7 @@
 import {
   SlashCommandBuilder,
   PermissionFlagsBits,
+  MessageFlags,
   EmbedBuilder,
   type ChatInputCommandInteraction,
   type TextChannel,
@@ -55,11 +56,11 @@ const command: BotCommand = {
         });
 
       if (!channel?.isTextBased()) {
-        await interaction.reply({ embeds: [errorEmbed("That channel is not a text channel.")], ephemeral: true });
+        await interaction.reply({ embeds: [errorEmbed("That channel is not a text channel.")], flags: MessageFlags.Ephemeral });
         return;
       }
       await channel.send({ embeds: [embed] });
-      await interaction.reply({ embeds: [successEmbed("Announcement sent!")], ephemeral: true });
+      await interaction.reply({ embeds: [successEmbed("Announcement sent!")], flags: MessageFlags.Ephemeral });
     } else if (sub === "react") {
       const messageId = interaction.options.getString("message_id", true);
       const emote = interaction.options.getString("emote", true);
@@ -68,10 +69,10 @@ const command: BotCommand = {
         const channel = interaction.channel as TextChannel;
         const message = await channel.messages.fetch(messageId);
         await message.react(emote);
-        await interaction.reply({ embeds: [successEmbed("Reaction added!")], ephemeral: true });
+        await interaction.reply({ embeds: [successEmbed("Reaction added!")], flags: MessageFlags.Ephemeral });
       } catch (err) {
         ctx.logger.warn({ err }, "Failed to add reaction");
-        await interaction.reply({ embeds: [errorEmbed("Failed to add reaction. Check the message ID and emoji.")], ephemeral: true });
+        await interaction.reply({ embeds: [errorEmbed("Failed to add reaction. Check the message ID and emoji.")], flags: MessageFlags.Ephemeral });
       }
     }
   },
