@@ -20,6 +20,7 @@ export default function LeaderboardPage() {
   const [entries, setEntries] = useState<LeaderboardEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [isAdmin, setIsAdmin] = useState(false);
 
   useEffect(() => {
     fetch(`/api/server/${guildId}/leaderboard`, { credentials: "same-origin" })
@@ -32,6 +33,11 @@ export default function LeaderboardPage() {
         setLoading(false);
       })
       .catch(() => { setError("Failed to load leaderboard."); setLoading(false); });
+
+    // Check if user has admin access (to show/hide settings link)
+    fetch(`/api/server/${guildId}`, { credentials: "same-origin" })
+      .then((res) => { if (res.ok) setIsAdmin(true); })
+      .catch(() => {});
   }, [guildId]);
 
   if (loading) {
@@ -50,12 +56,14 @@ export default function LeaderboardPage() {
           <h1 className="text-2xl font-bold">Leaderboard</h1>
           <p className="text-dc-text-muted text-sm mt-0.5">Top members by XP</p>
         </div>
-        <Link
-          href={`/dashboard/server/${guildId}`}
-          className="text-sm text-dc-accent hover:underline"
-        >
-          ← Back to Settings
-        </Link>
+        {isAdmin && (
+          <Link
+            href={`/dashboard/server/${guildId}`}
+            className="text-sm text-dc-accent hover:underline"
+          >
+            ← Back to Settings
+          </Link>
+        )}
       </div>
 
       {entries.length === 0 ? (

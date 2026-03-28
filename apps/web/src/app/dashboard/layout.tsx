@@ -109,7 +109,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           return (
             <div key={guild.guildId} className="mt-0.5">
               <a
-                href={`/dashboard/server/${guild.guildId}`}
+                href={guild.isAdmin ? `/dashboard/server/${guild.guildId}` : `/dashboard/server/${guild.guildId}/leaderboard`}
                 className={`flex items-center gap-3 px-3 py-2 rounded-md text-sm transition-colors ${
                   isGuildActive
                     ? "bg-dc-bg-modifier text-dc-text-primary"
