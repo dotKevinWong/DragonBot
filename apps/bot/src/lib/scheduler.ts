@@ -24,7 +24,7 @@ interface TrackedJob {
   timezone: string;
 }
 
-const HOURLY_SYNC_MS = 3_600_000; // 1 hour
+const DAILY_SYNC_MS = 86_400_000; // 24 hours
 
 export class SchedulerManager {
   private jobs = new Map<string, TrackedJob>();
@@ -40,15 +40,15 @@ export class SchedulerManager {
   async loadAll(): Promise<void> {
     await this.reload();
 
-    // Hourly background sync as a safety net
+    // Daily background sync as a safety net
     this.syncTimer = setInterval(async () => {
       try {
-        this.logger.info("Hourly schedule sync running");
+        this.logger.info("Daily schedule sync running");
         await this.reload();
       } catch (err) {
-        this.logger.error({ err }, "Hourly schedule sync failed");
+        this.logger.error({ err }, "Daily schedule sync failed");
       }
-    }, HOURLY_SYNC_MS);
+    }, DAILY_SYNC_MS);
   }
 
   /** Full reload: sync in-memory jobs with the database. Called on startup and via /schedule reload */
