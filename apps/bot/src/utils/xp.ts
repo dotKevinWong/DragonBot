@@ -47,7 +47,8 @@ export function xpProgress(totalXp: number, level: number): { current: number; r
 /** Generate a text-based progress bar. */
 export function progressBar(current: number, total: number, length = 10): string {
   if (total <= 0) return "░".repeat(length);
-  const filled = Math.round((current / total) * length);
+  const ratio = Math.max(0, Math.min(1, current / total));
+  const filled = Math.round(ratio * length);
   const empty = length - filled;
   return "▓".repeat(filled) + "░".repeat(empty);
 }
