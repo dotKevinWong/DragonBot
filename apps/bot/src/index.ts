@@ -132,11 +132,11 @@ async function main() {
     await scheduler.loadAll();
     ctx.scheduler = scheduler;
 
-    // Start birthday checker (hourly cron + immediate check on startup)
+    // Birthday checker — runs on startup (catch-up) and via 4-hour sync timer
     const birthdayChecker = new BirthdayChecker(client, birthdayService, guildService, logger);
-    birthdayChecker.start();
-    birthdayChecker.check().catch((err) => logger.error({ err }, "Initial birthday check failed"));
+    await birthdayChecker.check(true);
     ctx.birthdayChecker = birthdayChecker;
+    logger.info("Birthday checker initialized");
 
     // Start webhook server for instant cache invalidation from web dashboard
     if (config.BOT_WEBHOOK_SECRET) {
@@ -182,8 +182,6 @@ async function main() {
     }, 8000);
 
     try {
-      // Stop background tasks
-      ctx.birthdayChecker?.stop();
       // Disconnect from Discord first to stop receiving new events
       client.destroy();
       // Flush XP to database

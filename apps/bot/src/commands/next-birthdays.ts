@@ -8,8 +8,8 @@ import type { BotCommand } from "../types/commands.js";
 import { errorEmbed } from "../utils/embeds.js";
 
 const MONTH_NAMES = [
-  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+  "January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December",
 ];
 
 const command: BotCommand = {
@@ -34,28 +34,51 @@ const command: BotCommand = {
       const members = await interaction.guild.members.fetch();
       const memberIds = [...members.keys()];
 
-      const upcoming = await ctx.services.birthday.getUpcomingBirthdays(memberIds, 10);
+      const upcoming = await ctx.services.birthday.getUpcomingBirthdays(memberIds, 15);
 
       if (upcoming.length === 0) {
         await interaction.editReply({
           embeds: [new EmbedBuilder()
-            .setTitle("🎂 Upcoming Birthdays")
+            .setTitle("Upcoming birthdays")
             .setDescription("No birthdays registered in this server yet.")
             .setColor(0xffd700)],
         });
         return;
       }
 
-      const lines = upcoming.map((b) => {
-        const monthName = MONTH_NAMES[b.month - 1] ?? "???";
-        const age = ctx.services.birthday.formatAge(b.year);
-        const ageStr = age ? ` (turning ${age.replace(/(?:st|nd|rd|th)$/, "")})` : "";
-        const daysStr = b.daysUntil === 0 ? "**Today!**" : `in ${b.daysUntil} day${b.daysUntil === 1 ? "" : "s"}`;
-        return `<@${b.discordId}> — ${monthName} ${b.day}${ageStr} — ${daysStr}`;
-      });
+      // Group by date (month-day) like MEE6
+      const now = new Date();
+      const currentYear = now.getFullYear();
+      const groups = new Map<string, { dateLabel: string; users: string[] }>();
+
+      for (const b of upcoming) {
+        const year = b.daysUntil === 0
+          ? currentYear
+          : (b.month < (now.getMonth() + 1) || (b.month === (now.getMonth() + 1) && b.day < now.getDate()))
+            ? currentYear + 1
+            : currentYear;
+
+        const monthName = MONTH_NAMES[b.month - 1] ?? "Unknown";
+        const dateLabel = `${monthName} ${String(b.day).padStart(2, "0")}, ${year}`;
+        const key = `${year}-${String(b.month).padStart(2, "0")}-${String(b.day).padStart(2, "0")}`;
+
+        if (!groups.has(key)) {
+          groups.set(key, { dateLabel, users: [] });
+        }
+        groups.get(key)!.users.push(`<@${b.discordId}>`);
+      }
+
+      // Build description with date headers and user lists
+      const lines: string[] = [];
+      for (const [, group] of groups) {
+        lines.push(`**${group.dateLabel}**`);
+        for (const user of group.users) {
+          lines.push(`> ${user}`);
+        }
+      }
 
       const embed = new EmbedBuilder()
-        .setTitle("🎂 Upcoming Birthdays")
+        .setTitle("Upcoming birthdays")
         .setDescription(lines.join("\n"))
         .setColor(0xffd700)
         .setFooter({ text: "Set yours with /birthday set" });

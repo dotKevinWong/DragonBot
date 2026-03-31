@@ -1,12 +1,13 @@
-import cron, { type ScheduledTask } from "node-cron";
 import { EmbedBuilder, type Client, type TextChannel } from "discord.js";
 import type { Logger } from "pino";
 import type { BirthdayService } from "../services/birthday.service.js";
 import type { GuildService } from "../services/guild.service.js";
 
+/**
+ * Birthday checker — called on startup (catch-up) and via the 4-hour sync timer.
+ * No internal cron; scheduling is handled externally.
+ */
 export class BirthdayChecker {
-  private task: ScheduledTask | null = null;
-
   constructor(
     private client: Client,
     private birthdayService: BirthdayService,
@@ -14,24 +15,12 @@ export class BirthdayChecker {
     private logger: Logger,
   ) {}
 
-  /** Start the hourly birthday check cron. */
-  start(): void {
-    this.task = cron.schedule("0 * * * *", async () => {
-      await this.check();
-    });
-    this.logger.info("Birthday checker started (hourly)");
-  }
-
-  /** Stop the cron job. */
-  stop(): void {
-    if (this.task) {
-      this.task.stop();
-      this.task = null;
-    }
-  }
-
-  /** Run the birthday check for all enabled guilds. */
-  async check(): Promise<void> {
+  /**
+   * Run the birthday check for all enabled guilds.
+   * @param catchUp If true, skip the hour check and announce for any missed day (used on startup).
+   *                If false, only announce if the current hour is 9 AM in the guild's timezone.
+   */
+  async check(catchUp = false): Promise<void> {
     const log = this.logger.child({ component: "birthday-checker" });
 
     const allGuilds = this.guildService.getAllCached();
@@ -51,8 +40,10 @@ export class BirthdayChecker {
         });
         const currentHour = parseInt(formatter.format(now), 10);
 
-        // Only announce at 9 AM in the guild's timezone
-        if (currentHour !== 9) continue;
+        // Only announce at 9 AM unless catching up after a restart
+        if (!catchUp && currentHour !== 9) continue;
+        // On catch-up, only announce if it's past 9 AM (don't pre-announce before the scheduled time)
+        if (catchUp && currentHour < 9) continue;
 
         // Get today's date in the guild's timezone
         const dateFormatter = new Intl.DateTimeFormat("en-US", {
