@@ -53,6 +53,20 @@ export class TTLCache<T> {
     this.cache.clear();
   }
 
+  /** Return all non-expired values. */
+  values(): T[] {
+    const now = Date.now();
+    const result: T[] = [];
+    for (const [key, entry] of this.cache) {
+      if (now > entry.expiresAt) {
+        this.cache.delete(key);
+      } else {
+        result.push(entry.value);
+      }
+    }
+    return result;
+  }
+
   /** Get cache stats for debugging */
   get size(): number {
     return this.cache.size;

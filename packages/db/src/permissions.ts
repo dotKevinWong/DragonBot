@@ -9,6 +9,7 @@ export const PERMISSION_SCOPES = [
   "offtopic",
   "xp",
   "schedules",
+  "birthday",
   "managers",
   "*",
 ] as const;
@@ -78,4 +79,10 @@ export const FIELD_SCOPE_MAP: Record<string, PermissionScope> = {
   xpLevelupChannelId: "xp",
   xpExcludedChannelIds: "xp",
   xpExcludedRoleIds: "xp",
+  // Birthdays
+  isBirthdayEnabled: "birthday",
+  birthdayChannelId: "birthday",
+  birthdayRoleId: "birthday",
+  birthdayMessage: "birthday",
+  birthdayTimezone: "birthday",
 };

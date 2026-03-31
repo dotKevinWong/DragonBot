@@ -8,6 +8,7 @@ import {
   unique,
   uuid,
   index,
+  jsonb,
 } from "drizzle-orm/pg-core";
 
 export const users = pgTable("users", {
@@ -32,6 +33,12 @@ export const users = pgTable("users", {
   coop2: text("coop2"),
   coop3: text("coop3"),
   clubs: text("clubs").array(),
+
+  // Birthday
+  birthMonth: integer("birth_month"),
+  birthDay: integer("birth_day"),
+  birthYear: integer("birth_year"),
+
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),
 });
@@ -80,6 +87,13 @@ export const guilds = pgTable("guilds", {
   // Off-Topic
   offtopicImages: text("offtopic_images").array().notNull().default([]),
   offtopicMessage: text("offtopic_message"),
+
+  // Birthdays
+  isBirthdayEnabled: boolean("is_birthday_enabled").notNull().default(false),
+  birthdayChannelId: varchar("birthday_channel_id", { length: 20 }),
+  birthdayRoleId: varchar("birthday_role_id", { length: 20 }),
+  birthdayMessage: text("birthday_message"),
+  birthdayTimezone: text("birthday_timezone").notNull().default("America/New_York"),
 
   // XP / Leveling
   isXpEnabled: boolean("is_xp_enabled").notNull().default(false),
@@ -182,4 +196,18 @@ export const userXp = pgTable("user_xp", {
 }, (table) => [
   unique("user_xp_guild_id_discord_id_unique").on(table.guildId, table.discordId),
   index("user_xp_leaderboard_idx").on(table.guildId, table.totalXp),
+]);
+
+export const xpArchives = pgTable("xp_archives", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  guildId: varchar("guild_id", { length: 20 }).notNull(),
+  archivedBy: varchar("archived_by", { length: 20 }).notNull(),
+  reason: text("reason"),
+  data: jsonb("data").notNull(),
+  userCount: integer("user_count").notNull(),
+  totalXpSum: integer("total_xp_sum").notNull(),
+  restoredAt: timestamp("restored_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("xp_archives_guild_idx").on(table.guildId),
 ]);

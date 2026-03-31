@@ -1,5 +1,6 @@
 import {
   SlashCommandBuilder,
+  PermissionFlagsBits,
   type ChatInputCommandInteraction,
 } from "discord.js";
 import type { BotContext } from "../types/context.js";
@@ -8,7 +9,6 @@ import { AppError } from "../types/errors.js";
 import { successEmbed, errorEmbed, infoEmbed } from "../utils/embeds.js";
 
 let lastFlushAt = 0;
-let isFlushing = false;
 const FLUSH_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
 
 const command: BotCommand = {
@@ -33,6 +33,33 @@ const command: BotCommand = {
       sub
         .setName("status")
         .setDescription("View XP system status and stats"),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName("reset-all")
+        .setDescription("Reset ALL XP for this server (archives data first)")
+        .addStringOption((opt) =>
+          opt.setName("confirm").setDescription("Type CONFIRM to proceed").setRequired(true),
+        )
+        .addStringOption((opt) =>
+          opt.setName("reason").setDescription("Reason for reset (optional)").setRequired(false),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName("restore")
+        .setDescription("Restore XP from an archive (overwrites current XP)")
+        .addStringOption((opt) =>
+          opt.setName("archive_id").setDescription("Archive ID from /xp-admin archives").setRequired(true),
+        )
+        .addStringOption((opt) =>
+          opt.setName("confirm").setDescription("Type CONFIRM to proceed").setRequired(true),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName("archives")
+        .setDescription("List recent XP archives for this server"),
     ),
 
   async execute(interaction: ChatInputCommandInteraction, ctx: BotContext) {
@@ -57,7 +84,7 @@ const command: BotCommand = {
       switch (sub) {
         case "flush": {
           const now = Date.now();
-          if (isFlushing) {
+          if (ctx.services.xp.flushing) {
             await interaction.editReply({ embeds: [errorEmbed("A flush is already in progress.")] });
             break;
           }
@@ -66,14 +93,8 @@ const command: BotCommand = {
             await interaction.editReply({ embeds: [errorEmbed(`Flush is on cooldown. Try again in ${remainingSec}s.`)] });
             break;
           }
-          // Set flags before awaiting to prevent concurrent flushes
-          isFlushing = true;
           lastFlushAt = now;
-          try {
-            await ctx.services.xp.flush();
-          } finally {
-            isFlushing = false;
-          }
+          await ctx.services.xp.flush();
           await interaction.editReply({ embeds: [successEmbed("XP data flushed to database.")] });
           break;
         }
@@ -109,6 +130,202 @@ const command: BotCommand = {
               `Users in this guild: ${guildEntries.length}\n\n` +
               `*Configure XP settings via the web dashboard.*`,
             )],
+          });
+          break;
+        }
+
+        case "reset-all": {
+          // Require Administrator permission (stricter than MANAGE_GUILD)
+          const isAdmin = interaction.memberPermissions?.has(PermissionFlagsBits.Administrator) ?? false;
+          if (!isAdmin) {
+            await interaction.editReply({ embeds: [errorEmbed("This command requires **Administrator** permission.")] });
+            break;
+          }
+
+          const confirmStr = interaction.options.getString("confirm", true);
+          if (confirmStr !== "CONFIRM") {
+            await interaction.editReply({ embeds: [errorEmbed("You must type `CONFIRM` to reset all XP. This action archives current data before resetting.")] });
+            break;
+          }
+
+          const reason = interaction.options.getString("reason") ?? null;
+          const guildId = interaction.guildId;
+          const log = ctx.logger.child({ command: "xp-admin", sub: "reset-all", guildId });
+
+          // Step 1: Flush current dirty data to ensure archive is complete
+          log.info("Flushing XP before archive...");
+          try {
+            await ctx.services.xp.flush();
+          } catch (err) {
+            log.error({ err }, "Flush failed before reset — aborting");
+            await interaction.editReply({ embeds: [errorEmbed("Failed to flush XP data before reset. Reset aborted to prevent data loss.")] });
+            break;
+          }
+
+          // Step 2: Snapshot current guild data
+          const snapshot = ctx.services.xp.getGuildSnapshot(guildId);
+          if (snapshot.length === 0) {
+            await interaction.editReply({ embeds: [errorEmbed("No XP data found for this server.")] });
+            break;
+          }
+
+          const totalXpSum = snapshot.reduce((sum, e) => sum + e.totalXp, 0);
+
+          // Step 3: Archive to database
+          if (!ctx.xpArchiveRepo) {
+            await interaction.editReply({ embeds: [errorEmbed("Archive system not available.")] });
+            break;
+          }
+
+          const archive = await ctx.xpArchiveRepo.create(
+            guildId,
+            interaction.user.id,
+            reason,
+            snapshot,
+            snapshot.length,
+            totalXpSum,
+          );
+          log.info({ archiveId: archive.id, users: snapshot.length, totalXp: totalXpSum }, "XP archived");
+
+          // Step 4: Zero all in-memory entries
+          ctx.services.xp.resetAllInMemory(guildId);
+
+          // Step 5: Flush zeros to DB immediately
+          try {
+            await ctx.services.xp.flush();
+          } catch (err) {
+            log.error({ err }, "Flush after reset failed — data archived but DB may be stale");
+          }
+
+          await interaction.editReply({
+            embeds: [successEmbed(
+              `**XP Reset Complete**\n\n` +
+              `Archived **${snapshot.length}** users with **${totalXpSum.toLocaleString()}** total XP.\n` +
+              `Archive ID: \`${archive.id}\`\n` +
+              `${reason ? `Reason: ${reason}\n` : ""}` +
+              `\nUse \`/xp-admin restore\` with the archive ID to undo.`,
+            )],
+          });
+          break;
+        }
+
+        case "restore": {
+          // Require Administrator permission
+          const isAdmin = interaction.memberPermissions?.has(PermissionFlagsBits.Administrator) ?? false;
+          if (!isAdmin) {
+            await interaction.editReply({ embeds: [errorEmbed("This command requires **Administrator** permission.")] });
+            break;
+          }
+
+          if (!ctx.xpArchiveRepo) {
+            await interaction.editReply({ embeds: [errorEmbed("Archive system not available.")] });
+            break;
+          }
+
+          const confirmStr = interaction.options.getString("confirm", true);
+          if (confirmStr !== "CONFIRM") {
+            await interaction.editReply({ embeds: [errorEmbed("You must type `CONFIRM` to restore. This will **overwrite** current XP data.")] });
+            break;
+          }
+
+          const archiveId = interaction.options.getString("archive_id", true).trim();
+          const guildId = interaction.guildId;
+          const log = ctx.logger.child({ command: "xp-admin", sub: "restore", guildId, archiveId });
+
+          // Validate UUID format
+          if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(archiveId)) {
+            await interaction.editReply({ embeds: [errorEmbed("Invalid archive ID format.")] });
+            break;
+          }
+
+          const archive = await ctx.xpArchiveRepo.findByIdAndGuild(archiveId, guildId);
+          if (!archive) {
+            await interaction.editReply({ embeds: [errorEmbed("Archive not found.")] });
+            break;
+          }
+
+          // Validate archive data structure before restoring
+          const rawData = archive.data;
+          if (!Array.isArray(rawData)) {
+            await interaction.editReply({ embeds: [errorEmbed("Archive data is corrupted (not an array).")] });
+            break;
+          }
+          const entries: { discordId: string; totalXp: number; level: number; messageCount: number; xpMessageCount: number; lastMessageAt: number }[] = [];
+          for (const item of rawData) {
+            if (
+              typeof item !== "object" || item === null ||
+              typeof (item as Record<string, unknown>).discordId !== "string" ||
+              typeof (item as Record<string, unknown>).totalXp !== "number" ||
+              typeof (item as Record<string, unknown>).level !== "number" ||
+              typeof (item as Record<string, unknown>).messageCount !== "number" ||
+              typeof (item as Record<string, unknown>).xpMessageCount !== "number" ||
+              typeof (item as Record<string, unknown>).lastMessageAt !== "number"
+            ) {
+              await interaction.editReply({ embeds: [errorEmbed("Archive data is corrupted (invalid entry format).")] });
+              break;
+            }
+            entries.push(item as { discordId: string; totalXp: number; level: number; messageCount: number; xpMessageCount: number; lastMessageAt: number });
+          }
+          if (entries.length !== rawData.length) break; // validation failed above
+
+          // Auto-archive current data before overwriting
+          await ctx.services.xp.flush();
+          const currentSnapshot = ctx.services.xp.getGuildSnapshot(guildId);
+          if (currentSnapshot.length > 0) {
+            const currentXpSum = currentSnapshot.reduce((sum, e) => sum + e.totalXp, 0);
+            await ctx.xpArchiveRepo.create(
+              guildId,
+              interaction.user.id,
+              `Auto-archive before restore of ${archiveId.slice(0, 8)}`,
+              currentSnapshot,
+              currentSnapshot.length,
+              currentXpSum,
+            );
+            log.info({ users: currentSnapshot.length }, "Auto-archived current XP before restore");
+          }
+
+          const restored = ctx.services.xp.rehydrateGuild(guildId, entries);
+
+          // Flush to DB
+          try {
+            await ctx.services.xp.flush();
+          } catch (err) {
+            log.error({ err }, "Flush after restore failed — data is in memory but may not be persisted");
+          }
+
+          // Mark archive as restored
+          await ctx.xpArchiveRepo.markRestored(archiveId);
+
+          log.info({ restored, archiveId }, "XP restored from archive");
+          await interaction.editReply({
+            embeds: [successEmbed(
+              `**XP Restored**\n\n` +
+              `Restored **${restored}** users with **${archive.totalXpSum.toLocaleString()}** total XP from archive \`${archiveId.slice(0, 8)}...\`.`,
+            )],
+          });
+          break;
+        }
+
+        case "archives": {
+          if (!ctx.xpArchiveRepo) {
+            await interaction.editReply({ embeds: [errorEmbed("Archive system not available.")] });
+            break;
+          }
+
+          const archives = await ctx.xpArchiveRepo.findByGuild(interaction.guildId, 10);
+          if (archives.length === 0) {
+            await interaction.editReply({ embeds: [infoEmbed("No XP archives found for this server.")] });
+            break;
+          }
+
+          const lines = archives.map((a) => {
+            const date = new Date(a.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+            const restored = a.restoredAt ? " ✅ restored" : "";
+            return `\`${a.id.slice(0, 8)}...\` — ${date} — ${a.userCount} users, ${a.totalXpSum.toLocaleString()} XP — <@${a.archivedBy}>${restored}`;
+          });
+
+          await interaction.editReply({
+            embeds: [infoEmbed(`**XP Archives**\n\n${lines.join("\n")}`)],
           });
           break;
         }

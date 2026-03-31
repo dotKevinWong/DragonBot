@@ -35,6 +35,11 @@ interface GuildSettings {
   xpLevelupChannelId: string | null;
   xpExcludedChannelIds: string[];
   xpExcludedRoleIds: string[];
+  isBirthdayEnabled: boolean;
+  birthdayChannelId: string | null;
+  birthdayRoleId: string | null;
+  birthdayMessage: string | null;
+  birthdayTimezone: string;
 }
 
 interface DiscordChannel {
@@ -565,6 +570,9 @@ export default function ServerSettingsPage() {
       xpCooldownSeconds: settings.xpCooldownSeconds,
       xpExcludedChannelIds: settings.xpExcludedChannelIds,
       xpExcludedRoleIds: settings.xpExcludedRoleIds,
+      isBirthdayEnabled: settings.isBirthdayEnabled,
+      birthdayMessage: settings.birthdayMessage,
+      birthdayTimezone: settings.birthdayTimezone,
     };
 
     // Only include role/channel IDs if we successfully loaded Discord data
@@ -577,6 +585,8 @@ export default function ServerSettingsPage() {
       updateFields.introRoleId = settings.introRoleId;
       updateFields.modNotesChannelId = settings.modNotesChannelId;
       updateFields.xpLevelupChannelId = settings.xpLevelupChannelId;
+      updateFields.birthdayChannelId = settings.birthdayChannelId;
+      updateFields.birthdayRoleId = settings.birthdayRoleId;
     }
 
     const res = await fetch(`/api/server/${guildId}`, {
@@ -763,6 +773,35 @@ export default function ServerSettingsPage() {
             selected={settings.xpExcludedRoleIds}
             onChange={(v) => update("xpExcludedRoleIds", v)}
           />
+        </div>
+      </Section>
+
+      <Section title="Birthdays">
+        <Toggle label="Enable birthday announcements" checked={settings.isBirthdayEnabled} onChange={(v) => update("isBirthdayEnabled", v)} />
+        <ChannelSelect label="Birthday Announcement Channel" value={settings.birthdayChannelId} onChange={(v) => update("birthdayChannelId", v)} channels={channels} filterType="text" />
+        <RoleSelect label="Birthday Role (assigned for the day)" value={settings.birthdayRoleId} onChange={(v) => update("birthdayRoleId", v)} roles={roles} />
+        <div>
+          <label className="block text-xs font-semibold text-dc-text-secondary uppercase tracking-wide mb-1.5">Custom Message (optional)</label>
+          <textarea
+            className="w-full px-3 py-2 bg-dc-input border border-dc-border rounded-md text-dc-text-primary text-sm outline-none focus:border-dc-accent resize-y min-h-16 transition-colors"
+            value={settings.birthdayMessage ?? ""}
+            onChange={(e) => update("birthdayMessage", e.target.value || null)}
+            placeholder="Happy {age} birthday {user}! 🎂🎉"
+          />
+          <p className="text-xs text-dc-text-muted mt-1">Use <code className="text-dc-accent">{"{user}"}</code> for the mention and <code className="text-dc-accent">{"{age}"}</code> for the ordinal age (e.g. 27th). Leave blank for default.</p>
+        </div>
+        <div>
+          <label className="block text-xs font-semibold text-dc-text-secondary uppercase tracking-wide mb-1.5">Timezone</label>
+          <select
+            className="w-full px-3 py-2 bg-dc-input border border-dc-border rounded-md text-dc-text-primary text-sm outline-none focus:border-dc-accent cursor-pointer transition-colors"
+            value={settings.birthdayTimezone}
+            onChange={(e) => update("birthdayTimezone", e.target.value)}
+          >
+            {["America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles", "America/Anchorage", "Pacific/Honolulu", "Europe/London", "Europe/Paris", "Asia/Tokyo", "UTC"].map((tz) => (
+              <option key={tz} value={tz}>{tz}</option>
+            ))}
+          </select>
+          <p className="text-xs text-dc-text-muted mt-1">Birthdays are announced at 9 AM in this timezone.</p>
         </div>
       </Section>
 

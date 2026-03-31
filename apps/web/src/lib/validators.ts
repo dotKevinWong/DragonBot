@@ -80,7 +80,20 @@ export const profileUpdateSchema = z.object({
   coop3: z.string().trim().max(200).nullable().optional(),
   clubs: z.array(z.string().trim().max(100)).max(20).nullable().optional(),
   isProfileDisabled: z.boolean().optional(),
-});
+  // Birthday
+  birthMonth: z.number().int().min(1).max(12).nullable().optional(),
+  birthDay: z.number().int().min(1).max(31).nullable().optional(),
+  birthYear: z.number().int().min(1900).max(new Date().getFullYear()).nullable().optional(),
+}).refine((data) => {
+  // Validate birthDay against the month's max days
+  if (data.birthMonth != null && data.birthDay != null) {
+    const maxDays = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    if (data.birthDay > maxDays[data.birthMonth - 1]!) return false;
+  }
+  // If one is set, both must be set (no orphaned fields)
+  if ((data.birthMonth == null) !== (data.birthDay == null)) return false;
+  return true;
+}, { message: "Invalid birthday: check month/day combination", path: ["birthDay"] });
 
 const discordId = z.string().regex(/^[0-9]{17,20}$/);
 
@@ -115,6 +128,18 @@ export const guildSettingsUpdateSchema = z.object({
   xpLevelupChannelId: discordId.nullable().optional(),
   xpExcludedChannelIds: z.array(discordId).optional(),
   xpExcludedRoleIds: z.array(discordId).optional(),
+  // Birthdays
+  isBirthdayEnabled: z.boolean().optional(),
+  birthdayChannelId: discordId.nullable().optional(),
+  birthdayRoleId: discordId.nullable().optional(),
+  birthdayMessage: z.string().max(2000).nullable().optional(),
+  birthdayTimezone: z.string().max(50).optional().refine(
+    (val) => {
+      if (val === undefined) return true;
+      try { Intl.DateTimeFormat(undefined, { timeZone: val }); return true; } catch { return false; }
+    },
+    { message: "Invalid IANA timezone" },
+  ),
 }).refine((data) => {
   if (data.xpMin !== undefined && data.xpMax !== undefined) {
     return data.xpMin <= data.xpMax;

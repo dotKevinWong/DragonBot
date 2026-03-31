@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
+import { CronBuilder } from "@/components/cron-builder";
 
 interface Schedule {
   id: string;
@@ -23,17 +24,6 @@ interface DiscordChannel {
   name: string;
   type: string;
 }
-
-const PRESET_INTERVALS = [
-  { label: "Every 15 minutes", cron: "*/15 * * * *" },
-  { label: "Every 30 minutes", cron: "*/30 * * * *" },
-  { label: "Every hour", cron: "0 * * * *" },
-  { label: "Every 6 hours", cron: "0 */6 * * *" },
-  { label: "Daily at 9 AM", cron: "0 9 * * *" },
-  { label: "Daily at 12 PM", cron: "0 12 * * *" },
-  { label: "Weekdays at 9 AM", cron: "0 9 * * 1-5" },
-  { label: "Weekly on Monday at 9 AM", cron: "0 9 * * 1" },
-];
 
 const TIMEZONES = [
   "America/New_York",
@@ -86,7 +76,6 @@ export default function SchedulesPage() {
   const [formChannel, setFormChannel] = useState("");
   const [formMessage, setFormMessage] = useState("");
   const [formCron, setFormCron] = useState("0 9 * * *");
-  const [formCustomCron, setFormCustomCron] = useState("");
   const [formTimezone, setFormTimezone] = useState("America/New_York");
   const [formIsEmbed, setFormIsEmbed] = useState(false);
   const [formEmbedTitle, setFormEmbedTitle] = useState("");
@@ -116,7 +105,6 @@ export default function SchedulesPage() {
   async function handleCreate() {
     setSaving(true);
     setMessage(null);
-    const cronExpr = formCron === "custom" ? formCustomCron : formCron;
 
     const res = await fetch(`/api/server/${guildId}/schedules`, {
       method: "POST",
@@ -125,7 +113,7 @@ export default function SchedulesPage() {
       body: JSON.stringify({
         channelId: formChannel,
         message: formMessage,
-        cronExpression: cronExpr,
+        cronExpression: formCron,
         timezone: formTimezone,
         isEmbed: formIsEmbed,
         embedTitle: formIsEmbed && formEmbedTitle ? formEmbedTitle : null,
@@ -286,40 +274,22 @@ export default function SchedulesPage() {
               />
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-xs font-semibold text-dc-text-secondary uppercase tracking-wide mb-1.5">Interval</label>
-                <select
-                  className="w-full px-3 py-2 bg-dc-input border border-dc-border rounded-md text-dc-text-primary text-sm outline-none focus:border-dc-accent cursor-pointer"
-                  value={formCron}
-                  onChange={(e) => setFormCron(e.target.value)}
-                >
-                  {PRESET_INTERVALS.map((p) => (
-                    <option key={p.cron} value={p.cron}>{p.label}</option>
-                  ))}
-                  <option value="custom">Custom cron...</option>
-                </select>
-                {formCron === "custom" && (
-                  <input
-                    className="w-full px-3 py-2 mt-2 bg-dc-input border border-dc-border rounded-md text-dc-text-primary text-sm outline-none focus:border-dc-accent"
-                    value={formCustomCron}
-                    onChange={(e) => setFormCustomCron(e.target.value)}
-                    placeholder="*/30 * * * *"
-                  />
-                )}
-              </div>
-              <div>
-                <label className="block text-xs font-semibold text-dc-text-secondary uppercase tracking-wide mb-1.5">Timezone</label>
-                <select
-                  className="w-full px-3 py-2 bg-dc-input border border-dc-border rounded-md text-dc-text-primary text-sm outline-none focus:border-dc-accent cursor-pointer"
-                  value={formTimezone}
-                  onChange={(e) => setFormTimezone(e.target.value)}
-                >
-                  {TIMEZONES.map((tz) => (
-                    <option key={tz} value={tz}>{tz}</option>
-                  ))}
-                </select>
-              </div>
+            <div className="bg-dc-bg-tertiary/50 border border-dc-border rounded-lg p-4">
+              <label className="block text-xs font-semibold text-dc-text-secondary uppercase tracking-wide mb-3">Schedule</label>
+              <CronBuilder value={formCron} onChange={setFormCron} />
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-dc-text-secondary uppercase tracking-wide mb-1.5">Timezone</label>
+              <select
+                className="w-full px-3 py-2 bg-dc-input border border-dc-border rounded-md text-dc-text-primary text-sm outline-none focus:border-dc-accent cursor-pointer"
+                value={formTimezone}
+                onChange={(e) => setFormTimezone(e.target.value)}
+              >
+                {TIMEZONES.map((tz) => (
+                  <option key={tz} value={tz}>{tz}</option>
+                ))}
+              </select>
             </div>
 
             <div className="flex items-center justify-between py-1">
@@ -399,23 +369,15 @@ export default function SchedulesPage() {
                   <label className="block text-xs font-semibold text-dc-text-secondary uppercase tracking-wide mb-1.5">Message</label>
                   <textarea className="w-full px-3 py-2 bg-dc-input border border-dc-border rounded-md text-dc-text-primary text-sm outline-none focus:border-dc-accent resize-y min-h-20" value={editData.message ?? ""} onChange={(e) => setEditData({ ...editData, message: e.target.value })} />
                 </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-xs font-semibold text-dc-text-secondary uppercase tracking-wide mb-1.5">Cron Expression</label>
-                    <select className="w-full px-3 py-2 bg-dc-input border border-dc-border rounded-md text-dc-text-primary text-sm outline-none focus:border-dc-accent cursor-pointer" value={PRESET_INTERVALS.some((p) => p.cron === editData.cronExpression) ? editData.cronExpression : "custom"} onChange={(e) => { if (e.target.value === "custom") { setEditData({ ...editData, cronExpression: "" }); } else { setEditData({ ...editData, cronExpression: e.target.value }); } }}>
-                      {PRESET_INTERVALS.map((p) => (<option key={p.cron} value={p.cron}>{p.label}</option>))}
-                      <option value="custom">Custom cron...</option>
-                    </select>
-                    {!PRESET_INTERVALS.some((p) => p.cron === editData.cronExpression) && (
-                      <input className="w-full px-3 py-2 mt-2 bg-dc-input border border-dc-border rounded-md text-dc-text-primary text-sm outline-none focus:border-dc-accent" value={editData.cronExpression ?? ""} onChange={(e) => setEditData({ ...editData, cronExpression: e.target.value })} placeholder="*/30 * * * *" />
-                    )}
-                  </div>
-                  <div>
-                    <label className="block text-xs font-semibold text-dc-text-secondary uppercase tracking-wide mb-1.5">Timezone</label>
-                    <select className="w-full px-3 py-2 bg-dc-input border border-dc-border rounded-md text-dc-text-primary text-sm outline-none focus:border-dc-accent cursor-pointer" value={editData.timezone ?? "America/New_York"} onChange={(e) => setEditData({ ...editData, timezone: e.target.value })}>
-                      {TIMEZONES.map((tz) => (<option key={tz} value={tz}>{tz}</option>))}
-                    </select>
-                  </div>
+                <div className="bg-dc-bg-tertiary/50 border border-dc-border rounded-lg p-4">
+                  <label className="block text-xs font-semibold text-dc-text-secondary uppercase tracking-wide mb-3">Schedule</label>
+                  <CronBuilder value={editData.cronExpression ?? "0 9 * * *"} onChange={(cron) => setEditData({ ...editData, cronExpression: cron })} />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-dc-text-secondary uppercase tracking-wide mb-1.5">Timezone</label>
+                  <select className="w-full px-3 py-2 bg-dc-input border border-dc-border rounded-md text-dc-text-primary text-sm outline-none focus:border-dc-accent cursor-pointer" value={editData.timezone ?? "America/New_York"} onChange={(e) => setEditData({ ...editData, timezone: e.target.value })}>
+                    {TIMEZONES.map((tz) => (<option key={tz} value={tz}>{tz}</option>))}
+                  </select>
                 </div>
                 <div className="flex items-center justify-between py-1">
                   <span className="text-sm text-dc-text-secondary">Send as embed</span>

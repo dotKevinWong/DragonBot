@@ -1,4 +1,4 @@
-import { eq, desc, sql } from "drizzle-orm";
+import { eq, desc, sql, and } from "drizzle-orm";
 import type { DrizzleClient } from "@dragonbot/db";
 import { userXp } from "@dragonbot/db";
 
@@ -80,5 +80,37 @@ export class XpRepository {
           updatedAt: sql`excluded.updated_at`,
         },
       });
+  }
+
+  /** Get all XP rows for a specific guild. */
+  async findAllForGuild(guildId: string): Promise<XpRow[]> {
+    return this.db.select({
+      guildId: userXp.guildId,
+      discordId: userXp.discordId,
+      totalXp: userXp.totalXp,
+      level: userXp.level,
+      messageCount: userXp.messageCount,
+      xpMessageCount: userXp.xpMessageCount,
+      lastMessageAt: userXp.lastMessageAt,
+    })
+      .from(userXp)
+      .where(eq(userXp.guildId, guildId));
+  }
+
+  /** Zero out all XP rows for a guild (UPDATE, not DELETE — preserves keys). */
+  async resetAllForGuild(guildId: string): Promise<number> {
+    const rows = await this.db
+      .update(userXp)
+      .set({
+        totalXp: 0,
+        level: 0,
+        messageCount: 0,
+        xpMessageCount: 0,
+        lastMessageAt: null,
+        updatedAt: new Date(),
+      })
+      .where(eq(userXp.guildId, guildId))
+      .returning({ id: userXp.id });
+    return rows.length;
   }
 }

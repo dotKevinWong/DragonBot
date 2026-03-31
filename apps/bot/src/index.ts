@@ -28,7 +28,11 @@ import { ScheduledMessageRepository } from "./repositories/scheduled-message.rep
 import { ScheduledMessageService } from "./services/scheduled-message.service.js";
 import { XpRepository } from "./repositories/xp.repository.js";
 import { XpService } from "./services/xp.service.js";
+import { BirthdayRepository } from "./repositories/birthday.repository.js";
+import { XpArchiveRepository } from "./repositories/xp-archive.repository.js";
+import { BirthdayService } from "./services/birthday.service.js";
 import { SchedulerManager } from "./lib/scheduler.js";
+import { BirthdayChecker } from "./lib/birthday-checker.js";
 import { startWebhookServer } from "./lib/webhook-server.js";
 import {
   loadCommands,
@@ -73,6 +77,9 @@ async function main() {
   const scheduledMessageService = new ScheduledMessageService(scheduledMessageRepo);
   const xpRepo = new XpRepository(db);
   const xpService = new XpService(xpRepo, logger);
+  const birthdayRepo = new BirthdayRepository(db);
+  const birthdayService = new BirthdayService(birthdayRepo);
+  const xpArchiveRepo = new XpArchiveRepository(db);
 
   // 6. Context
   const ctx: BotContext = {
@@ -92,7 +99,9 @@ async function main() {
       guildAdmin: guildAdminService,
       scheduledMessage: scheduledMessageService,
       xp: xpService,
+      birthday: birthdayService,
     },
+    xpArchiveRepo,
   };
 
   // 7. Discord client
@@ -122,6 +131,11 @@ async function main() {
     const scheduler = new SchedulerManager(client, scheduledMessageService, logger);
     await scheduler.loadAll();
     ctx.scheduler = scheduler;
+
+    // Start birthday checker (hourly cron)
+    const birthdayChecker = new BirthdayChecker(client, birthdayService, guildService, logger);
+    birthdayChecker.start();
+    ctx.birthdayChecker = birthdayChecker;
 
     // Start webhook server for instant cache invalidation from web dashboard
     if (config.BOT_WEBHOOK_SECRET) {
@@ -166,6 +180,8 @@ async function main() {
     }, 8000);
 
     try {
+      // Stop background tasks
+      ctx.birthdayChecker?.stop();
       // Disconnect from Discord first to stop receiving new events
       client.destroy();
       // Flush XP to database

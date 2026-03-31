@@ -14,9 +14,29 @@ interface Profile {
   coop2: string | null;
   coop3: string | null;
   clubs: string[] | null;
+  birthMonth: number | null;
+  birthDay: number | null;
+  birthYear: number | null;
   isVerified: boolean;
   verifiedAt: string | null;
 }
+
+const MONTH_OPTIONS = [
+  { label: "January", value: 1 },
+  { label: "February", value: 2 },
+  { label: "March", value: 3 },
+  { label: "April", value: 4 },
+  { label: "May", value: 5 },
+  { label: "June", value: 6 },
+  { label: "July", value: 7 },
+  { label: "August", value: 8 },
+  { label: "September", value: 9 },
+  { label: "October", value: 10 },
+  { label: "November", value: 11 },
+  { label: "December", value: 12 },
+];
+
+const DAYS_IN_MONTH = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
 
 const YEAR_OPTIONS = ["Freshman", "Sophomore", "Pre-Junior", "Junior", "Senior", "Alumni"];
 
@@ -245,6 +265,66 @@ export default function ProfilePage() {
           <Input label="Co-op 2" value={profile.coop2 ?? ""} onChange={(v) => update("coop2", v || null)} />
           <Input label="Co-op 3" value={profile.coop3 ?? ""} onChange={(v) => update("coop3", v || null)} />
         </div>
+      </div>
+
+      {/* Birthday */}
+      <div className="bg-dc-bg-secondary border border-dc-border rounded-lg p-5 mb-4">
+        <h2 className="text-sm font-semibold text-dc-text-primary mb-4">Birthday</h2>
+        <p className="text-xs text-dc-text-muted mb-3">Your birthday is shared across all servers that have birthday announcements enabled. Year is optional.</p>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div>
+            <label className="block text-xs font-semibold text-dc-text-secondary uppercase tracking-wide mb-1.5">Month</label>
+            <select
+              className="w-full px-3 py-2 bg-dc-input border border-dc-border rounded-md text-dc-text-primary text-sm outline-none focus:border-dc-accent transition-colors cursor-pointer"
+              value={profile.birthMonth ?? ""}
+              onChange={(e) => {
+                const month = e.target.value ? Number(e.target.value) : null;
+                setProfile({ ...profile, birthMonth: month, ...(month === null ? { birthDay: null, birthYear: null } : {}) });
+              }}
+            >
+              <option value="">Not set</option>
+              {MONTH_OPTIONS.map((m) => (
+                <option key={m.value} value={m.value}>{m.label}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-dc-text-secondary uppercase tracking-wide mb-1.5">Day</label>
+            <select
+              className="w-full px-3 py-2 bg-dc-input border border-dc-border rounded-md text-dc-text-primary text-sm outline-none focus:border-dc-accent transition-colors cursor-pointer"
+              value={profile.birthDay ?? ""}
+              onChange={(e) => setProfile({ ...profile, birthDay: e.target.value ? Number(e.target.value) : null })}
+              disabled={!profile.birthMonth}
+            >
+              <option value="">Select day</option>
+              {profile.birthMonth && Array.from({ length: DAYS_IN_MONTH[profile.birthMonth - 1]! }, (_, i) => i + 1).map((d) => (
+                <option key={d} value={d}>{d}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-dc-text-secondary uppercase tracking-wide mb-1.5">Year <span className="text-dc-text-muted font-normal normal-case">(optional)</span></label>
+            <input
+              type="number"
+              className="w-full px-3 py-2 bg-dc-input border border-dc-border rounded-md text-dc-text-primary text-sm outline-none focus:border-dc-accent transition-colors"
+              value={profile.birthYear ?? ""}
+              onChange={(e) => setProfile({ ...profile, birthYear: e.target.value ? Number(e.target.value) : null })}
+              placeholder="e.g. 1999"
+              min={1900}
+              max={new Date().getFullYear()}
+              disabled={!profile.birthMonth}
+            />
+          </div>
+        </div>
+        {profile.birthMonth && profile.birthDay && (
+          <button
+            type="button"
+            onClick={() => setProfile({ ...profile, birthMonth: null, birthDay: null, birthYear: null })}
+            className="mt-3 text-xs text-dc-danger hover:text-dc-danger/80 transition-colors cursor-pointer"
+          >
+            Remove birthday
+          </button>
+        )}
       </div>
 
       {/* Sticky unsaved changes banner */}

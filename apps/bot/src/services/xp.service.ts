@@ -50,6 +50,7 @@ export class XpService {
   private xpMap = new Map<string, XpEntry>();
   private flushTimer: ReturnType<typeof setInterval> | null = null;
   private isHydrated = false;
+  private isFlushing = false;
 
   constructor(
     private repo: XpRepository,
@@ -177,8 +178,26 @@ export class XpService {
     return true;
   }
 
+  /** Whether a flush is currently in progress (prevents concurrent flushes). */
+  get flushing(): boolean {
+    return this.isFlushing;
+  }
+
   /** Batch-upsert all dirty entries to DB, then mark them clean. */
   async flush(): Promise<void> {
+    if (this.isFlushing) {
+      this.logger.warn("Flush already in progress, skipping");
+      return;
+    }
+    this.isFlushing = true;
+    try {
+      await this.flushInternal();
+    } finally {
+      this.isFlushing = false;
+    }
+  }
+
+  private async flushInternal(): Promise<void> {
     const dirtyEntries: { guildId: string; discordId: string; entry: XpEntry }[] = [];
 
     for (const [key, entry] of this.xpMap) {
@@ -254,6 +273,52 @@ export class XpService {
       dirtyEntries: dirtyCount,
       isHydrated: this.isHydrated,
     };
+  }
+
+  /** Get a snapshot of all guild entries for archiving. */
+  getGuildSnapshot(guildId: string): { discordId: string; totalXp: number; level: number; messageCount: number; xpMessageCount: number; lastMessageAt: number }[] {
+    return this.getGuildEntries(guildId).map((e) => ({
+      discordId: e.discordId,
+      totalXp: e.totalXp,
+      level: e.level,
+      messageCount: e.messageCount,
+      xpMessageCount: e.xpMessageCount,
+      lastMessageAt: e.lastMessageAt,
+    }));
+  }
+
+  /** Zero all XP entries for a guild in memory. Mark dirty for flush. */
+  resetAllInMemory(guildId: string): number {
+    const prefix = `${guildId}:`;
+    let count = 0;
+    for (const [key, entry] of this.xpMap) {
+      if (key.startsWith(prefix)) {
+        entry.totalXp = 0;
+        entry.level = 0;
+        entry.messageCount = 0;
+        entry.xpMessageCount = 0;
+        entry.lastMessageAt = 0;
+        entry.dirty = true;
+        count++;
+      }
+    }
+    return count;
+  }
+
+  /** Restore archived entries into memory. Marks dirty for flush. */
+  rehydrateGuild(guildId: string, entries: { discordId: string; totalXp: number; level: number; messageCount: number; xpMessageCount: number; lastMessageAt: number }[]): number {
+    for (const e of entries) {
+      const key = `${guildId}:${e.discordId}`;
+      this.xpMap.set(key, {
+        totalXp: e.totalXp,
+        level: e.level,
+        messageCount: e.messageCount,
+        xpMessageCount: e.xpMessageCount,
+        lastMessageAt: e.lastMessageAt,
+        dirty: true,
+      });
+    }
+    return entries.length;
   }
 
   /** Extract all entries for a guild with their discordIds. */

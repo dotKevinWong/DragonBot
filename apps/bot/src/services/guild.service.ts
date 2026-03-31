@@ -46,6 +46,11 @@ export class GuildService {
     return result;
   }
 
+  /** Return all cached guild settings (for iterating in birthday checker, etc.). */
+  getAllCached() {
+    return this.cache.values();
+  }
+
   async getAllBanSyncGuilds() {
     return this.repo.findAllWithBanSync();
   }

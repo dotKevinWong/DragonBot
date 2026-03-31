@@ -35,5 +35,6 @@ PROJECT-PLAN.md
 CLAUDE.md
 .claude/
 /scripts
+/apps/bot/src/scripts
 
 # Lock files are kept (pnpm-lock.yaml)

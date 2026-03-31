@@ -87,8 +87,10 @@ interface BotContext {
     guildAdmin: GuildAdminService;
     scheduledMessage: ScheduledMessageService;
     xp: XpService;
+    birthday: BirthdayService;
   };
   scheduler?: SchedulerManager;   // present after startup, absent during early init
+  birthdayChecker?: BirthdayChecker; // present after startup
 }
 ```
 
@@ -148,6 +150,8 @@ PostgreSQL on Neon. Schema defined in `packages/db/src/schema.ts`. Both apps imp
 - **auth_tokens** — One-time tokens for web login (64-char, 5-min expiry, single-use)
 - **user_xp** — Per-guild XP data: `total_xp`, `level`, `message_count`, `xp_message_count`, `last_message_at`. Unique on `(guild_id, discord_id)`.
 
+Note: Birthday data (`birth_month`, `birth_day`, `birth_year`) is stored on the **users** table as a global per-user property.
+
 ### Key Patterns
 
 - All tables use UUID primary keys (`uuid("id").primaryKey().defaultRandom()`)
@@ -173,6 +177,7 @@ PostgreSQL on Neon. Schema defined in `packages/db/src/schema.ts`. Both apps imp
 | AI / Ask | `is_ask_enabled`, `ask_system_prompt` |
 | Off-Topic | `offtopic_images`, `offtopic_message` |
 | XP / Leveling | `is_xp_enabled`, `xp_min`, `xp_max`, `xp_cooldown_seconds`, `xp_levelup_channel_id`, `xp_excluded_channel_ids[]`, `xp_excluded_role_ids[]` |
+| Birthdays | `is_birthday_enabled`, `birthday_channel_id`, `birthday_message`, `birthday_timezone` |
 
 When a setting is null or a feature toggle is false, the feature is simply inactive — no errors, no fallback.
 
@@ -180,7 +185,7 @@ When a setting is null or a feature toggle is false, the feature is simply inact
 
 The `guild_admins` table provides granular permissions for users who don't have Discord's MANAGE_GUILD permission. Available scopes:
 
-`verification`, `welcome`, `logging`, `intro_gate`, `moderation`, `suggestions`, `ai`, `offtopic`, `xp`, `schedules`, `managers`, `*` (wildcard)
+`verification`, `welcome`, `logging`, `intro_gate`, `moderation`, `suggestions`, `ai`, `offtopic`, `xp`, `schedules`, `birthday`, `managers`, `*` (wildcard)
 
 Discord MANAGE_GUILD always grants full access. The `guild_admins` table is additive.
 
@@ -293,6 +298,61 @@ Discord embed format matching the original bot:
 - **Database** → Neon (serverless PostgreSQL)
 
 Config files: `railway.json`, `vercel.json`
+
+## Security
+
+### General Principles
+
+- **Never trust user input.** All data from Discord interactions, API request bodies, query params, and path params must be validated with zod before use. Guild IDs, channel IDs, role IDs, and user IDs are validated against `/^[0-9]{17,20}$/`.
+- **No raw SQL.** Use Drizzle's query builder exclusively. If raw SQL is unavoidable, use parameterized queries — never interpolate user input into SQL strings.
+- **No `eval()`, `Function()`, or dynamic code execution.** Never execute user-supplied strings as code.
+- **No secret logging.** Never log tokens, API keys, JWTs, verification codes, or `DATABASE_URL`.
+
+### Authentication & Authorization
+
+- **JWT validation on every authenticated request.** Every API route that reads or writes user/guild data must verify the JWT signature and expiration.
+- **Authorization is not authentication.** After verifying identity via JWT, always check the user has permission for the specific guild/resource (MANAGE_GUILD permission, guild_admins table entry, or resource ownership).
+- **Auth tokens are single-use.** Delete the `auth_tokens` row immediately after JWT exchange. Never allow reuse.
+- **Sensitive data is ephemeral.** Verification codes, login links, and tokens must only appear in ephemeral Discord replies — never in public channels.
+
+### API Endpoint Security
+
+- **Validate all path params before DB queries.** Return 400 for malformed IDs, not a DB error.
+- **Scope all queries to the authenticated user's permissions.** An admin of Guild A must never access Guild B's data.
+- **Return generic error messages to clients.** Stack traces, SQL errors, and internal details go to pino logs only.
+- **No open redirects.** Never construct redirect URLs from user input. `WEBAPP_URL` is validated at startup.
+
+### Webhook Server Security
+
+- **Always verify `BOT_WEBHOOK_SECRET`** in the `Authorization` header. Reject unauthenticated requests.
+- **Validate webhook payloads.** The `guildId` query param must pass snowflake validation before any work.
+
+### Bot-Specific Security
+
+- **Permission checks in commands.** Admin/mod commands must verify Discord permissions or guild_admins status in the handler — never rely solely on Discord's built-in command permissions.
+- **AI prompt injection.** The `/ask` endpoint passes user input to OpenAI. System prompts must not contain secrets or internal implementation details. Sanitize or truncate excessively long inputs.
+- **Email domain allowlist.** Verification is restricted to `drexel.edu` and `dragons.drexel.edu` in the service layer. Never add wildcard patterns.
+
+### Environment & Deployment
+
+- **`.env*.local` must be in `.gitignore`.** Never commit secrets.
+- **All env vars are validated with zod at startup.** Missing required vars cause immediate exit — never fall back to empty strings for secrets.
+- **Run `pnpm audit` periodically** to check for vulnerable dependencies.
+
+### What AI Agents Must NOT Do
+
+When modifying this codebase, AI coding assistants must **never**:
+
+1. **Add unauthenticated endpoints.** Every new API route that reads or writes data must include JWT verification and authorization checks.
+2. **Bypass validation.** Never skip zod validation on any input boundary.
+3. **Hardcode secrets or tokens.** Always use environment variables — never put API keys, tokens, or passwords in source code.
+4. **Add debug/backdoor routes.** Never create `/api/debug`, `/api/test`, `/api/admin-bypass`, or any route that skips authentication — even "temporarily."
+5. **Log sensitive data.** Never log tokens, passwords, verification codes, JWTs, or user emails.
+6. **Weaken auth checks.** Never make permission checks always return `true`, skip guild ownership verification, or remove webhook secret validation.
+7. **Expose internal errors.** Never return raw error messages, stack traces, or SQL errors to API clients.
+8. **Add `eval()` or dynamic code execution.** Never use `eval()`, `new Function()`, or execute user-supplied strings as code.
+9. **Disable HTTPS or certificate validation.** Never set `NODE_TLS_REJECT_UNAUTHORIZED=0`.
+10. **Add wildcard CORS.** Never set `Access-Control-Allow-Origin: *` on authenticated endpoints.
 
 ## Style & Conventions
 

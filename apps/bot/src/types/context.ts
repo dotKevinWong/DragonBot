@@ -13,7 +13,10 @@ import type { LoggingService } from "../services/logging.service.js";
 import type { GuildAdminService } from "../services/guild-admin.service.js";
 import type { ScheduledMessageService } from "../services/scheduled-message.service.js";
 import type { XpService } from "../services/xp.service.js";
+import type { BirthdayService } from "../services/birthday.service.js";
+import type { XpArchiveRepository } from "../repositories/xp-archive.repository.js";
 import type { SchedulerManager } from "../lib/scheduler.js";
+import type { BirthdayChecker } from "../lib/birthday-checker.js";
 
 export interface BotContext {
   db: DrizzleClient;
@@ -32,6 +35,9 @@ export interface BotContext {
     guildAdmin: GuildAdminService;
     scheduledMessage: ScheduledMessageService;
     xp: XpService;
+    birthday: BirthdayService;
   };
+  xpArchiveRepo?: XpArchiveRepository;
   scheduler?: SchedulerManager;
+  birthdayChecker?: BirthdayChecker;
 }
