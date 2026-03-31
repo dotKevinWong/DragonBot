@@ -6,7 +6,6 @@ import type { GuildService } from "../services/guild.service.js";
 
 export class BirthdayChecker {
   private task: ScheduledTask | null = null;
-  private lastCheckDate = new Map<string, string>(); // guildId → "M-D"
 
   constructor(
     private client: Client,
@@ -17,7 +16,6 @@ export class BirthdayChecker {
 
   /** Start the hourly birthday check cron. */
   start(): void {
-    // Run at the top of every hour
     this.task = cron.schedule("0 * * * *", async () => {
       await this.check();
     });
@@ -68,10 +66,9 @@ export class BirthdayChecker {
         const month = parseInt(monthStr!, 10);
         const day = parseInt(dayStr!, 10);
 
-        // Dedup: skip if we already checked this guild today
+        // Dedup: skip if we already announced for this guild today (persisted in DB, survives restarts)
         const checkKey = `${month}-${day}`;
-        if (this.lastCheckDate.get(guild.guildId) === checkKey) continue;
-        this.lastCheckDate.set(guild.guildId, checkKey);
+        if (guild.lastBirthdayCheckDate === checkKey) continue;
 
         // Remove yesterday's birthday role before assigning today's
         if (guild.birthdayRoleId) {
@@ -87,6 +84,9 @@ export class BirthdayChecker {
           day,
           log,
         );
+
+        // Persist the check date so restarts don't re-announce
+        await this.guildService.updateSettings(guild.guildId, { lastBirthdayCheckDate: checkKey });
       } catch (err) {
         log.error({ err, guildId: guild.guildId }, "Birthday check failed for guild, continuing to next");
       }
@@ -100,7 +100,6 @@ export class BirthdayChecker {
       const discordGuild = this.client.guilds.cache.get(guildId);
       if (!discordGuild) return;
 
-      // Fetch members with the birthday role
       const membersWithRole = discordGuild.members.cache.filter((m) => m.roles.cache.has(roleId));
       let removed = 0;
       for (const [, member] of membersWithRole) {
@@ -131,23 +130,19 @@ export class BirthdayChecker {
     const guildLog = log.child({ guildId });
 
     try {
-      // Get today's birthday users
       const birthdayUsers = await this.birthdayService.getTodaysBirthdays(month, day);
       if (birthdayUsers.length === 0) return;
 
-      // Get the Discord guild to check membership
       const discordGuild = this.client.guilds.cache.get(guildId);
       if (!discordGuild) {
         guildLog.warn("Guild not in cache, skipping birthday check");
         return;
       }
 
-      // Fetch members if cache is sparse
       const birthdayDiscordIds = birthdayUsers.map((b) => b.discordId);
       const members = await discordGuild.members.fetch({ user: birthdayDiscordIds }).catch(() => null);
       if (!members || members.size === 0) return;
 
-      // Get the announcement channel
       const channel = await this.client.channels.fetch(channelId).catch(() => null);
       if (!channel || !channel.isTextBased()) {
         guildLog.warn("Birthday channel not found or not text-based");
@@ -155,13 +150,11 @@ export class BirthdayChecker {
       }
       const textChannel = channel as TextChannel;
 
-      // Send one announcement per birthday user
       let announced = 0;
       for (const birthday of birthdayUsers) {
         const member = members.get(birthday.discordId);
         if (!member) continue;
 
-        // Assign birthday role
         if (roleId) {
           try {
             await member.roles.add(roleId);
@@ -178,7 +171,7 @@ export class BirthdayChecker {
 
         const embed = new EmbedBuilder()
           .setDescription(message)
-          .setColor(0xffd700); // Gold
+          .setColor(0xffd700);
 
         await textChannel.send({ embeds: [embed] });
         announced++;

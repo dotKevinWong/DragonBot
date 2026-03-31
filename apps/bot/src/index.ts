@@ -132,9 +132,10 @@ async function main() {
     await scheduler.loadAll();
     ctx.scheduler = scheduler;
 
-    // Start birthday checker (hourly cron)
+    // Start birthday checker (hourly cron + immediate check on startup)
     const birthdayChecker = new BirthdayChecker(client, birthdayService, guildService, logger);
     birthdayChecker.start();
+    birthdayChecker.check().catch((err) => logger.error({ err }, "Initial birthday check failed"));
     ctx.birthdayChecker = birthdayChecker;
 
     // Start webhook server for instant cache invalidation from web dashboard
@@ -155,7 +156,8 @@ async function main() {
         await xpService.flush();
         await guildService.hydrateAll();
         await scheduler.reload();
-        logger.info("Periodic sync complete (XP flush + guild settings + schedule reload)");
+        await birthdayChecker.check();
+        logger.info("Periodic sync complete (XP flush + guild settings + schedule reload + birthday check)");
       } catch (err) {
         logger.error({ err }, "Periodic sync failed");
       }

@@ -94,6 +94,7 @@ export const guilds = pgTable("guilds", {
   birthdayRoleId: varchar("birthday_role_id", { length: 20 }),
   birthdayMessage: text("birthday_message"),
   birthdayTimezone: text("birthday_timezone").notNull().default("America/New_York"),
+  lastBirthdayCheckDate: text("last_birthday_check_date"),
 
   // XP / Leveling
   isXpEnabled: boolean("is_xp_enabled").notNull().default(false),

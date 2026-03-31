@@ -30,14 +30,9 @@ const command: BotCommand = {
     }
 
     try {
-      // Get all guild member IDs from cache
-      const members = interaction.guild.members.cache;
+      // Fetch all guild members (cache may be incomplete)
+      const members = await interaction.guild.members.fetch();
       const memberIds = [...members.keys()];
-
-      if (memberIds.length === 0) {
-        await interaction.editReply({ embeds: [errorEmbed("No members found in cache. Try again shortly.")] });
-        return;
-      }
 
       const upcoming = await ctx.services.birthday.getUpcomingBirthdays(memberIds, 10);
 
