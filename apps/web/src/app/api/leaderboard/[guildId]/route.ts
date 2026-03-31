@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { eq, desc } from "drizzle-orm";
 import { userXp, guilds } from "@dragonbot/db";
 import { db } from "@/lib/db";
-import { resolveDiscordUser } from "@/lib/discord";
+import { resolveDiscordUsers } from "@/lib/discord";
 import { DISCORD_SNOWFLAKE_RE } from "@/lib/validators";
 
 export async function GET(
@@ -38,16 +38,15 @@ export async function GET(
     .orderBy(desc(userXp.totalXp))
     .limit(100);
 
-  const withUsers = await Promise.all(
-    entries.map(async (entry) => {
-      const user = await resolveDiscordUser(entry.discordId);
-      return {
-        ...entry,
-        displayName: user?.displayName ?? entry.discordId,
-        avatarUrl: user?.avatarUrl ?? null,
-      };
-    }),
-  );
+  const userMap = await resolveDiscordUsers(entries.map((e) => e.discordId));
+  const withUsers = entries.map((entry) => {
+    const user = userMap.get(entry.discordId);
+    return {
+      ...entry,
+      displayName: user?.displayName ?? entry.discordId,
+      avatarUrl: user?.avatarUrl ?? null,
+    };
+  });
 
   return NextResponse.json({
     guildName: guildRows[0]!.guildName,

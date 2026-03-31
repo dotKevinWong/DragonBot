@@ -318,10 +318,14 @@ const command: BotCommand = {
             break;
           }
 
+          const archiverIds = [...new Set(archives.map((a) => a.archivedBy))];
+          const members = await interaction.guild!.members.fetch({ user: archiverIds });
           const lines = archives.map((a) => {
             const date = new Date(a.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
             const restored = a.restoredAt ? " ✅ restored" : "";
-            return `\`${a.id.slice(0, 8)}...\` — ${date} — ${a.userCount} users, ${a.totalXpSum.toLocaleString()} XP — <@${a.archivedBy}>${restored}`;
+            const archiver = members.get(a.archivedBy);
+            const archiverName = archiver ? `@${archiver.displayName}` : `<@${a.archivedBy}>`;
+            return `\`${a.id.slice(0, 8)}...\` — ${date} — ${a.userCount} users, ${a.totalXpSum.toLocaleString()} XP — ${archiverName}${restored}`;
           });
 
           await interaction.editReply({

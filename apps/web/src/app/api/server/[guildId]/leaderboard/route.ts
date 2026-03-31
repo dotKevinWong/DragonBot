@@ -3,7 +3,7 @@ import { eq, desc } from "drizzle-orm";
 import { userXp } from "@dragonbot/db";
 import { db } from "@/lib/db";
 import { getAuthenticatedUser } from "@/lib/auth";
-import { isGuildMember, resolveDiscordUser } from "@/lib/discord";
+import { isGuildMember, resolveDiscordUsers } from "@/lib/discord";
 import { DISCORD_SNOWFLAKE_RE } from "@/lib/validators";
 
 export async function GET(
@@ -40,17 +40,15 @@ export async function GET(
     .orderBy(desc(userXp.totalXp))
     .limit(100);
 
-  // Resolve Discord usernames in parallel
-  const withUsers = await Promise.all(
-    entries.map(async (entry) => {
-      const user = await resolveDiscordUser(entry.discordId);
-      return {
-        ...entry,
-        displayName: user?.displayName ?? entry.discordId,
-        avatarUrl: user?.avatarUrl ?? null,
-      };
-    }),
-  );
+  const userMap = await resolveDiscordUsers(entries.map((e) => e.discordId));
+  const withUsers = entries.map((entry) => {
+    const user = userMap.get(entry.discordId);
+    return {
+      ...entry,
+      displayName: user?.displayName ?? entry.discordId,
+      avatarUrl: user?.avatarUrl ?? null,
+    };
+  });
 
   return NextResponse.json(withUsers);
 }

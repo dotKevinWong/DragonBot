@@ -166,7 +166,7 @@ export async function getUserGuildPermissions(
 const userCache = new Map<string, { data: { username: string; displayName: string; avatarUrl: string | null } | null; expiresAt: number }>();
 const USER_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 
-/** Resolve a Discord user ID to display name + avatar. Cached for 10 minutes. */
+/** Resolve a Discord user ID to display name + avatar. Cached for 10 minutes. Respects rate limits. */
 export async function resolveDiscordUser(userId: string): Promise<{ username: string; displayName: string; avatarUrl: string | null } | null> {
   const cached = userCache.get(userId);
   if (cached && Date.now() < cached.expiresAt) return cached.data;
@@ -175,6 +175,10 @@ export async function resolveDiscordUser(userId: string): Promise<{ username: st
     const res = await fetch(`https://discord.com/api/v10/users/${userId}`, {
       headers: { Authorization: `Bot ${env.DISCORD_API_TOKEN}` },
     });
+    if (res.status === 429) {
+      // Rate limited — don't cache the failure so we can retry later
+      return null;
+    }
     if (!res.ok) {
       userCache.set(userId, { data: null, expiresAt: Date.now() + USER_CACHE_TTL_MS });
       return null;
@@ -190,6 +194,27 @@ export async function resolveDiscordUser(userId: string): Promise<{ username: st
   } catch {
     return null;
   }
+}
+
+/** Resolve multiple Discord user IDs with concurrency control to avoid rate limits. */
+export async function resolveDiscordUsers(
+  userIds: string[],
+  concurrency = 5,
+): Promise<Map<string, { username: string; displayName: string; avatarUrl: string | null }>> {
+  const results = new Map<string, { username: string; displayName: string; avatarUrl: string | null }>();
+  const queue = [...userIds];
+
+  while (queue.length > 0) {
+    const batch = queue.splice(0, concurrency);
+    const resolved = await Promise.all(
+      batch.map(async (id) => ({ id, data: await resolveDiscordUser(id) })),
+    );
+    for (const { id, data } of resolved) {
+      if (data) results.set(id, data);
+    }
+  }
+
+  return results;
 }
 
 /** Check if a user is a member of a guild (regardless of permissions). */

@@ -202,8 +202,14 @@ const command: BotCommand = {
         return;
       }
 
+      const guild = interaction.guild!;
+      const members = await guild.members.fetch({ user: [...new Set(admins.flatMap((a) => [a.discordId, a.addedBy]))] });
+      const resolveName = (id: string) => {
+        const member = members.get(id);
+        return member ? `@${member.displayName}` : `<@${id}>`;
+      };
       const lines = admins.map(
-        (a) => `<@${a.discordId}> — \`${a.permissions.join(", ")}\` (added by <@${a.addedBy}>)`,
+        (a) => `${resolveName(a.discordId)} — \`${a.permissions.join(", ")}\` (added by ${resolveName(a.addedBy)})`,
       );
       await interaction.editReply({
         embeds: [infoEmbed(`**Guild Managers**\n\n${lines.join("\n")}`)],
