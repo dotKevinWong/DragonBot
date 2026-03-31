@@ -66,10 +66,10 @@ const command: BotCommand = {
           groups.set(key, { dateLabel, users: [] });
         }
         const member = members.get(b.discordId);
-        const displayName = member
-          ? `@${member.displayName}`
+        const mention = member
+          ? `<@${b.discordId}> (${member.displayName})`
           : `<@${b.discordId}>`;
-        groups.get(key)!.users.push(displayName);
+        groups.get(key)!.users.push(mention);
       }
 
       // Build description with date headers and user lists

@@ -324,7 +324,7 @@ const command: BotCommand = {
             const date = new Date(a.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
             const restored = a.restoredAt ? " ✅ restored" : "";
             const archiver = members.get(a.archivedBy);
-            const archiverName = archiver ? `@${archiver.displayName}` : `<@${a.archivedBy}>`;
+            const archiverName = archiver ? `<@${a.archivedBy}> (${archiver.displayName})` : `<@${a.archivedBy}>`;
             return `\`${a.id.slice(0, 8)}...\` — ${date} — ${a.userCount} users, ${a.totalXpSum.toLocaleString()} XP — ${archiverName}${restored}`;
           });
 

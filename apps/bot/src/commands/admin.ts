@@ -206,7 +206,7 @@ const command: BotCommand = {
       const members = await guild.members.fetch({ user: [...new Set(admins.flatMap((a) => [a.discordId, a.addedBy]))] });
       const resolveName = (id: string) => {
         const member = members.get(id);
-        return member ? `@${member.displayName}` : `<@${id}>`;
+        return member ? `<@${id}> (${member.displayName})` : `<@${id}>`;
       };
       const lines = admins.map(
         (a) => `${resolveName(a.discordId)} — \`${a.permissions.join(", ")}\` (added by ${resolveName(a.addedBy)})`,
