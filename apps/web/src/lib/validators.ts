@@ -128,6 +128,8 @@ export const guildSettingsUpdateSchema = z.object({
   xpLevelupChannelId: discordId.nullable().optional(),
   xpExcludedChannelIds: z.array(discordId).optional(),
   xpExcludedRoleIds: z.array(discordId).optional(),
+  // YouTube Notifications
+  isYoutubeEnabled: z.boolean().optional(),
   // Birthdays
   isBirthdayEnabled: z.boolean().optional(),
   birthdayChannelId: discordId.nullable().optional(),

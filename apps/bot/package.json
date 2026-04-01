@@ -15,6 +15,7 @@
     "discord.js": "^14.18.0",
     "dotenv": "^17.3.1",
     "drizzle-orm": "^0.44.0",
+    "fast-xml-parser": "^5.5.9",
     "node-cron": "^4.2.1",
     "openai": "^4.85.0",
     "pino": "^9.6.0",

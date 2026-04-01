@@ -202,8 +202,11 @@ const command: BotCommand = {
         return;
       }
 
-      const guild = interaction.guild!;
-      const members = await guild.members.fetch({ user: [...new Set(admins.flatMap((a) => [a.discordId, a.addedBy]))] });
+      if (!interaction.guild) {
+        await interaction.editReply({ embeds: [errorEmbed("Guild not available.")] });
+        return;
+      }
+      const members = await interaction.guild.members.fetch({ user: [...new Set(admins.flatMap((a) => [a.discordId, a.addedBy]))] });
       const resolveName = (id: string) => {
         const member = members.get(id);
         return member ? `<@${id}> (${member.displayName})` : `<@${id}>`;

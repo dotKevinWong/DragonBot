@@ -105,6 +105,8 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           const isGuildActive = pathname.startsWith(`/dashboard/server/${guild.guildId}`);
           const isSettings = pathname === `/dashboard/server/${guild.guildId}`;
           const isSchedules = pathname === `/dashboard/server/${guild.guildId}/schedules`;
+          const isYoutube = pathname === `/dashboard/server/${guild.guildId}/youtube`;
+          const isSuggestions = pathname === `/dashboard/server/${guild.guildId}/suggestions`;
           const isLeaderboard = pathname === `/dashboard/server/${guild.guildId}/leaderboard`;
           return (
             <div key={guild.guildId} className="mt-0.5">
@@ -142,6 +144,26 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                         }`}
                       >
                         Schedules
+                      </a>
+                      <a
+                        href={`/dashboard/server/${guild.guildId}/youtube`}
+                        className={`block px-3 py-1.5 rounded-md text-sm transition-colors ${
+                          isYoutube
+                            ? "text-dc-text-primary bg-dc-bg-modifier"
+                            : "text-dc-text-muted hover:text-dc-text-secondary hover:bg-dc-bg-modifier/50"
+                        }`}
+                      >
+                        YouTube
+                      </a>
+                      <a
+                        href={`/dashboard/server/${guild.guildId}/suggestions`}
+                        className={`block px-3 py-1.5 rounded-md text-sm transition-colors ${
+                          isSuggestions
+                            ? "text-dc-text-primary bg-dc-bg-modifier"
+                            : "text-dc-text-muted hover:text-dc-text-secondary hover:bg-dc-bg-modifier/50"
+                        }`}
+                      >
+                        Suggestions
                       </a>
                     </>
                   )}

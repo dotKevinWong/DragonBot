@@ -33,24 +33,25 @@ const command: BotCommand = {
       return;
     }
 
+    const percent = rankInfo.requiredLevelXp > 0
+      ? Math.round((rankInfo.currentLevelXp / rankInfo.requiredLevelXp) * 100)
+      : 0;
+    const barLength = 12;
+    const filled = Math.round((percent / 100) * barLength);
+    const bar = "▰".repeat(filled) + "▱".repeat(barLength - filled);
+
     const embed = new EmbedBuilder()
       .setColor(0x5865f2)
       .setAuthor({
         name: targetUser.displayName,
         iconURL: targetUser.displayAvatarURL(),
       })
-      .addFields(
-        { name: "Rank", value: `#${rankInfo.rank} / ${rankInfo.totalUsers}`, inline: true },
-        { name: "Level", value: `${rankInfo.level}`, inline: true },
-        { name: "Total XP", value: `${rankInfo.totalXp.toLocaleString()}`, inline: true },
-        { name: "Messages", value: `${rankInfo.messageCount.toLocaleString()}`, inline: true },
-        { name: "XP Messages", value: `${rankInfo.xpMessageCount.toLocaleString()}`, inline: true },
-        {
-          name: `Progress to Level ${rankInfo.level + 1}`,
-          value: `${rankInfo.progressBar} ${rankInfo.currentLevelXp} / ${rankInfo.requiredLevelXp} XP`,
-        },
-      )
-      .setTimestamp();
+      .setThumbnail(targetUser.displayAvatarURL({ size: 256 }))
+      .setDescription(
+        `**RANK #${rankInfo.rank}**  ·  **LEVEL ${rankInfo.level}**\n\n` +
+        `${bar}  ${percent}% to Level ${rankInfo.level + 1}\n` +
+        `${rankInfo.currentLevelXp.toLocaleString()} / ${rankInfo.requiredLevelXp.toLocaleString()} XP  ·  ${rankInfo.messageCount.toLocaleString()} messages`,
+      );
 
     await interaction.editReply({ embeds: [embed] });
   },

@@ -319,7 +319,11 @@ const command: BotCommand = {
           }
 
           const archiverIds = [...new Set(archives.map((a) => a.archivedBy))];
-          const members = await interaction.guild!.members.fetch({ user: archiverIds });
+          if (!interaction.guild) {
+            await interaction.editReply({ embeds: [errorEmbed("Guild not available.")] });
+            break;
+          }
+          const members = await interaction.guild.members.fetch({ user: archiverIds });
           const lines = archives.map((a) => {
             const date = new Date(a.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
             const restored = a.restoredAt ? " ✅ restored" : "";

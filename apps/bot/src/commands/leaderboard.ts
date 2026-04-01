@@ -1,8 +1,8 @@
-import { SlashCommandBuilder, EmbedBuilder, type ChatInputCommandInteraction } from "discord.js";
+import { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, type ChatInputCommandInteraction } from "discord.js";
 import type { BotContext } from "../types/context.js";
 import type { BotCommand } from "../types/commands.js";
 import { errorEmbed } from "../utils/embeds.js";
-import { xpProgress, progressBar } from "../utils/xp.js";
+import { xpProgress } from "../utils/xp.js";
 
 const MEDALS = ["🥇", "🥈", "🥉"];
 
@@ -57,18 +57,15 @@ const command: BotCommand = {
       }),
     );
 
-    // Build table rows
     const lines = resolved.map((entry) => {
       const rank = entry.rank;
-      const medal = rank <= 3 ? MEDALS[rank - 1] : `\`${String(rank).padStart(2)}\``;
+      const medal = rank <= 3 ? MEDALS[rank - 1] : `**${rank}**`;
       const progress = xpProgress(entry.totalXp, entry.level);
-      const bar = progressBar(progress.current, progress.required, 8);
+      const barLen = 8;
+      const filled = Math.round((progress.current / Math.max(progress.required, 1)) * barLen);
+      const bar = "▰".repeat(filled) + "▱".repeat(barLen - filled);
 
-      return [
-        `${medal} **${entry.name}**`,
-        `> Level **${entry.level}** · \`${entry.totalXp.toLocaleString()}\` XP · ${entry.messageCount.toLocaleString()} msgs (${entry.xpMessageCount.toLocaleString()} earned XP)`,
-        `> ${bar} ${progress.current}/${progress.required} to Lvl ${entry.level + 1}`,
-      ].join("\n");
+      return `${medal}\n**${entry.name}** | ${entry.messageCount.toLocaleString()} Messages (${entry.xpMessageCount.toLocaleString()} earned XP) | ${entry.totalXp.toLocaleString()} XP | Level ${entry.level}\n${bar} ${progress.current}/${progress.required} to Lvl ${entry.level + 1}`;
     });
 
     // Get requesting user's rank for footer
@@ -79,16 +76,24 @@ const command: BotCommand = {
 
     const embed = new EmbedBuilder()
       .setColor(0xffcc00)
-      .setTitle("🏆 Leaderboard")
+      .setAuthor({
+        name: interaction.guild?.name ?? "Leaderboard",
+        iconURL: interaction.guild?.iconURL() ?? undefined,
+      })
+      .setTitle("Leaderboard")
       .setDescription(lines.join("\n\n"))
       .setFooter({ text: `${footerText} · Page ${requestedPage}/${totalPages}` })
       .setTimestamp();
 
-    if (interaction.guild?.iconURL()) {
-      embed.setThumbnail(interaction.guild.iconURL());
-    }
+    const leaderboardUrl = `${ctx.config.WEBAPP_URL}/leaderboard/${interaction.guildId}`;
+    const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setLabel("View Full Leaderboard")
+        .setStyle(ButtonStyle.Link)
+        .setURL(leaderboardUrl),
+    );
 
-    await interaction.editReply({ embeds: [embed] });
+    await interaction.editReply({ embeds: [embed], components: [row] });
   },
 };
 

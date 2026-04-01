@@ -1,8 +1,8 @@
-import { SlashCommandBuilder, type ChatInputCommandInteraction, type TextChannel } from "discord.js";
+import { SlashCommandBuilder, EmbedBuilder, type ChatInputCommandInteraction, type TextChannel } from "discord.js";
 import type { BotContext } from "../types/context.js";
 import type { BotCommand } from "../types/commands.js";
 import { AppError } from "../types/errors.js";
-import { successEmbed, errorEmbed, infoEmbed } from "../utils/embeds.js";
+import { errorEmbed } from "../utils/embeds.js";
 
 const command: BotCommand = {
   data: new SlashCommandBuilder()
@@ -27,9 +27,14 @@ const command: BotCommand = {
         suggestion,
       });
 
-      await interaction.editReply({
-        embeds: [successEmbed(`Suggestion #${record.id} submitted! Thank you.`)],
-      });
+      const userEmbed = new EmbedBuilder()
+        .setColor(0x43b581)
+        .setTitle("Suggestion Submitted")
+        .setDescription(suggestion)
+        .setFooter({ text: "Thank you for your feedback!" })
+        .setTimestamp();
+
+      await interaction.editReply({ embeds: [userEmbed] });
 
       // Post to mod notes channel if configured
       const guild = await ctx.services.guild.getSettings(interaction.guildId);
@@ -37,10 +42,17 @@ const command: BotCommand = {
         try {
           const channel = await interaction.client.channels.fetch(guild.modNotesChannelId);
           if (channel?.isTextBased()) {
-            const embed = infoEmbed(
-              `**New Suggestion #${record.id}**\nFrom: ${interaction.user.tag}\n\n${suggestion}`,
-            );
-            const msg = await (channel as TextChannel).send({ embeds: [embed] });
+            const modEmbed = new EmbedBuilder()
+              .setColor(0xffcc00)
+              .setTitle("New Suggestion")
+              .setDescription(suggestion)
+              .addFields(
+                { name: "From", value: `<@${interaction.user.id}> (${interaction.user.tag})`, inline: true },
+                { name: "Status", value: "Pending", inline: true },
+              )
+              .setFooter({ text: `ID: ${record.id}` })
+              .setTimestamp();
+            const msg = await (channel as TextChannel).send({ embeds: [modEmbed] });
             await msg.react("👍");
             await msg.react("👎");
           }

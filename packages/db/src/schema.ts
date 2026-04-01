@@ -96,6 +96,9 @@ export const guilds = pgTable("guilds", {
   birthdayTimezone: text("birthday_timezone").notNull().default("America/New_York"),
   lastBirthdayCheckDate: text("last_birthday_check_date"),
 
+  // YouTube Notifications
+  isYoutubeEnabled: boolean("is_youtube_enabled").notNull().default(false),
+
   // XP / Leveling
   isXpEnabled: boolean("is_xp_enabled").notNull().default(false),
   xpMin: integer("xp_min").notNull().default(15),
@@ -197,6 +200,22 @@ export const userXp = pgTable("user_xp", {
 }, (table) => [
   unique("user_xp_guild_id_discord_id_unique").on(table.guildId, table.discordId),
   index("user_xp_leaderboard_idx").on(table.guildId, table.totalXp),
+]);
+
+export const youtubeSubscriptions = pgTable("youtube_subscriptions", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  guildId: varchar("guild_id", { length: 20 }).notNull(),
+  youtubeChannelId: varchar("youtube_channel_id", { length: 100 }).notNull(),
+  youtubeChannelName: varchar("youtube_channel_name", { length: 200 }),
+  notifyChannelId: varchar("notify_channel_id", { length: 20 }).notNull(),
+  customMessage: text("custom_message"),
+  lastVideoId: text("last_video_id"),
+  isEnabled: boolean("is_enabled").notNull().default(true),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),
+}, (table) => [
+  unique("youtube_subs_guild_channel_unique").on(table.guildId, table.youtubeChannelId),
+  index("youtube_subs_guild_idx").on(table.guildId),
 ]);
 
 export const xpArchives = pgTable("xp_archives", {

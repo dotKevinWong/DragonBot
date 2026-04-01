@@ -10,6 +10,7 @@ export const PERMISSION_SCOPES = [
   "xp",
   "schedules",
   "birthday",
+  "youtube",
   "managers",
   "*",
 ] as const;
@@ -85,4 +86,6 @@ export const FIELD_SCOPE_MAP: Record<string, PermissionScope> = {
   birthdayRoleId: "birthday",
   birthdayMessage: "birthday",
   birthdayTimezone: "birthday",
+  // YouTube
+  isYoutubeEnabled: "youtube",
 };

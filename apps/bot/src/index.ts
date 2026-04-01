@@ -31,8 +31,11 @@ import { XpService } from "./services/xp.service.js";
 import { BirthdayRepository } from "./repositories/birthday.repository.js";
 import { XpArchiveRepository } from "./repositories/xp-archive.repository.js";
 import { BirthdayService } from "./services/birthday.service.js";
+import { YouTubeRepository } from "./repositories/youtube.repository.js";
+import { YouTubeService } from "./services/youtube.service.js";
 import { SchedulerManager } from "./lib/scheduler.js";
 import { BirthdayChecker } from "./lib/birthday-checker.js";
+import { YouTubeChecker } from "./lib/youtube-checker.js";
 import { startWebhookServer } from "./lib/webhook-server.js";
 import {
   loadCommands,
@@ -79,6 +82,8 @@ async function main() {
   const xpService = new XpService(xpRepo, logger);
   const birthdayRepo = new BirthdayRepository(db);
   const birthdayService = new BirthdayService(birthdayRepo);
+  const youtubeRepo = new YouTubeRepository(db);
+  const youtubeService = new YouTubeService();
   const xpArchiveRepo = new XpArchiveRepository(db);
 
   // 6. Context
@@ -100,6 +105,7 @@ async function main() {
       scheduledMessage: scheduledMessageService,
       xp: xpService,
       birthday: birthdayService,
+      youtube: youtubeService,
     },
     xpArchiveRepo,
   };
@@ -138,6 +144,12 @@ async function main() {
     ctx.birthdayChecker = birthdayChecker;
     logger.info("Birthday checker initialized");
 
+    // YouTube checker — runs on startup (catch-up) and via 4-hour sync timer
+    const youtubeChecker = new YouTubeChecker(client, youtubeService, youtubeRepo, guildService, logger);
+    await youtubeChecker.check(true);
+    ctx.youtubeChecker = youtubeChecker;
+    logger.info("YouTube checker initialized");
+
     // Start webhook server for instant cache invalidation from web dashboard
     if (config.BOT_WEBHOOK_SECRET) {
       startWebhookServer({
@@ -157,7 +169,8 @@ async function main() {
         await guildService.hydrateAll();
         await scheduler.reload();
         await birthdayChecker.check();
-        logger.info("Periodic sync complete (XP flush + guild settings + schedule reload + birthday check)");
+        await youtubeChecker.check();
+        logger.info("Periodic sync complete (XP flush + guild settings + schedule reload + birthday check + YouTube check)");
       } catch (err) {
         logger.error({ err }, "Periodic sync failed");
       }
