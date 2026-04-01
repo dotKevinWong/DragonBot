@@ -64,6 +64,9 @@ export const FIELD_SCOPE_MAP: Record<string, PermissionScope> = {
   isIntroGateEnabled: "intro_gate",
   introMinChars: "intro_gate",
   introMinWords: "intro_gate",
+  introMinSubstantiveWords: "intro_gate",
+  introUniqueWordRatio: "intro_gate",
+  introMaxRepeatedCharPct: "intro_gate",
   // Suggestions
   isSuggestionsEnabled: "suggestions",
   // AI

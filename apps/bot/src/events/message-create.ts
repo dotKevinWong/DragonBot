@@ -20,11 +20,13 @@ const event: BotEvent<"messageCreate"> = {
       guild.introRoleId &&
       message.channel.id === guild.introChannelId
     ) {
-      const result = validateIntroduction(
-        message.content,
-        guild.introMinChars,
-        guild.introMinWords,
-      );
+      const result = validateIntroduction(message.content, {
+        minChars: guild.introMinChars,
+        minWords: guild.introMinWords,
+        minSubstantiveWords: guild.introMinSubstantiveWords,
+        uniqueWordRatio: guild.introUniqueWordRatio,
+        maxRepeatedCharPct: guild.introMaxRepeatedCharPct,
+      });
 
       if (result.valid) {
         try {
@@ -38,6 +40,35 @@ const event: BotEvent<"messageCreate"> = {
           }
         } catch (err) {
           ctx.logger.warn({ err }, "Failed to assign intro role");
+        }
+      } else {
+        // Delete the rejected message and DM the user with feedback
+        const originalContent = message.content.length > 1000
+          ? `${message.content.slice(0, 1000)}...`
+          : message.content;
+
+        try {
+          await message.delete();
+        } catch (err) {
+          ctx.logger.warn({ err, guildId: message.guild.id }, "Failed to delete rejected intro message");
+        }
+
+        try {
+          const dmEmbed = new EmbedBuilder()
+            .setColor(0xffcc00)
+            .setTitle("Introduction Not Accepted")
+            .setDescription(
+              `${result.reason}\n\nPlease try again in <#${guild.introChannelId}>.`,
+            )
+            .addFields({
+              name: "Your message",
+              value: originalContent || "(empty)",
+            })
+            .setFooter({ text: message.guild.name })
+            .setTimestamp();
+          await message.author.send({ embeds: [dmEmbed] });
+        } catch (err) {
+          ctx.logger.warn({ err, userId: message.author.id }, "Failed to DM user about rejected intro");
         }
       }
     }

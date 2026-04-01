@@ -73,6 +73,9 @@ export const guilds = pgTable("guilds", {
   isIntroGateEnabled: boolean("is_intro_gate_enabled").notNull().default(false),
   introMinChars: integer("intro_min_chars").notNull().default(24),
   introMinWords: integer("intro_min_words").notNull().default(5),
+  introMinSubstantiveWords: integer("intro_min_substantive_words").notNull().default(3),
+  introUniqueWordRatio: integer("intro_unique_word_ratio").notNull().default(50),
+  introMaxRepeatedCharPct: integer("intro_max_repeated_char_pct").notNull().default(50),
 
   // Mod Notes
   modNotesChannelId: varchar("mod_notes_channel_id", { length: 20 }),

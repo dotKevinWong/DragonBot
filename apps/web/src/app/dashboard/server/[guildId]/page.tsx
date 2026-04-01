@@ -22,6 +22,9 @@ interface GuildSettings {
   isIntroGateEnabled: boolean;
   introMinChars: number;
   introMinWords: number;
+  introMinSubstantiveWords: number;
+  introUniqueWordRatio: number;
+  introMaxRepeatedCharPct: number;
   modNotesChannelId: string | null;
   isSuggestionsEnabled: boolean;
   isAskEnabled: boolean;
@@ -559,6 +562,9 @@ export default function ServerSettingsPage() {
       isIntroGateEnabled: settings.isIntroGateEnabled,
       introMinChars: settings.introMinChars,
       introMinWords: settings.introMinWords,
+      introMinSubstantiveWords: settings.introMinSubstantiveWords,
+      introUniqueWordRatio: settings.introUniqueWordRatio,
+      introMaxRepeatedCharPct: settings.introMaxRepeatedCharPct,
       isSuggestionsEnabled: settings.isSuggestionsEnabled,
       isAskEnabled: settings.isAskEnabled,
       askSystemPrompt: settings.askSystemPrompt,
@@ -701,6 +707,29 @@ export default function ServerSettingsPage() {
           <div>
             <label className="block text-xs font-semibold text-dc-text-secondary uppercase tracking-wide mb-1.5">Min Words</label>
             <input type="number" className="w-full px-3 py-2 bg-dc-input border border-dc-border rounded-md text-dc-text-primary text-sm outline-none focus:border-dc-accent transition-colors" value={settings.introMinWords} onChange={(e) => update("introMinWords", parseInt(e.target.value) || 0)} min={0} />
+          </div>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div>
+            <label className="block text-xs font-semibold text-dc-text-secondary uppercase tracking-wide mb-1.5">
+              Min Substantive Words
+              <span className="ml-1 inline-block cursor-help text-dc-text-secondary/60" title="Words that aren't common filler (hi, hey, the, from, etc.). A real intro should mention names, majors, hobbies. Set to 0 to disable.">&#9432;</span>
+            </label>
+            <input type="number" className="w-full px-3 py-2 bg-dc-input border border-dc-border rounded-md text-dc-text-primary text-sm outline-none focus:border-dc-accent transition-colors" value={settings.introMinSubstantiveWords} onChange={(e) => update("introMinSubstantiveWords", parseInt(e.target.value) || 0)} min={0} max={100} />
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-dc-text-secondary uppercase tracking-wide mb-1.5">
+              Unique Word Ratio %
+              <span className="ml-1 inline-block cursor-help text-dc-text-secondary/60" title="Minimum percentage of words that must be unique. Catches repetitive spam like 'hi hi hi hi hi'. Set to 0 to disable.">&#9432;</span>
+            </label>
+            <input type="number" className="w-full px-3 py-2 bg-dc-input border border-dc-border rounded-md text-dc-text-primary text-sm outline-none focus:border-dc-accent transition-colors" value={settings.introUniqueWordRatio} onChange={(e) => update("introUniqueWordRatio", parseInt(e.target.value) || 0)} min={0} max={100} />
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-dc-text-secondary uppercase tracking-wide mb-1.5">
+              Max Repeated Char %
+              <span className="ml-1 inline-block cursor-help text-dc-text-secondary/60" title="Reject if any single character makes up more than this percentage of the message. Catches padding like 'aaaaaaa'. Set to 0 to disable.">&#9432;</span>
+            </label>
+            <input type="number" className="w-full px-3 py-2 bg-dc-input border border-dc-border rounded-md text-dc-text-primary text-sm outline-none focus:border-dc-accent transition-colors" value={settings.introMaxRepeatedCharPct} onChange={(e) => update("introMaxRepeatedCharPct", parseInt(e.target.value) || 0)} min={0} max={100} />
           </div>
         </div>
       </Section>
