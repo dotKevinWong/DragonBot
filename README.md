@@ -1,6 +1,6 @@
 # DragonBot v3
 
-🐉 A multi-guild Discord bot built for Drexel University communities, featuring email verification, moderation tools, user profiles, AI Q&A, scheduled messages, and a web dashboard.
+🐉 A multi-guild Discord bot built for Drexel University communities, featuring email verification, moderation tools, user profiles, AI Q&A, XP/leveling, polls, suggestions, YouTube notifications, scheduled messages, birthday tracking, and a web dashboard.
 
 ## 🎯 Features
 
@@ -8,13 +8,17 @@
 - 👨‍⚖️ **Ban Syncing** — Bans propagate across all servers with ban sync enabled
 - 😎 **User Profiles** — Students can share their name, major, college, year, co-ops, and more
 - 🤖 **AI Ask** — `/ask` command powered by OpenAI for answering questions
-- 📋 **Suggestions** — Community feature requests with status tracking
+- 📋 **Suggestions** — Community feature requests with status tracking and web dashboard management
+- 📊 **Polls** — Reaction-based polls with up to 20 options and custom emoji support
+- 🏆 **XP / Leveling** — MEE6-style XP system with in-memory caching, leaderboards, and archive/restore
+- 📺 **YouTube Notifications** — RSS-based upload alerts for subscribed YouTube channels (no API key needed)
+- 🎂 **Birthday Tracking** — Set birthdays with automated announcements per server
 - 🔐 **Guild Managers** — Granular permission system for delegating server management
 - 📝 **Audit Logging** — Discord-style log embeds for joins, leaves, bans, message edits/deletes, role changes, voice activity
 - 🚪 **Introduction Gate** — Require new members to write a proper intro before accessing the server
 - 👋 **Welcome Messages** — Customizable channel and DM welcome messages with placeholders
 - ⏰ **Scheduled Messages** — Automated recurring messages with cron scheduling
-- 🌐 **Web Dashboard** — Manage server settings, profiles, and schedules from a browser
+- 🌐 **Web Dashboard** — Manage server settings, profiles, schedules, suggestions, and YouTube subscriptions from a browser
 - 📣 **Mod Tools** — Announcements and reactions via bot commands
 - 🎲 **Fun Commands** — Dice rolls, LaTeX rendering, and more
 
@@ -125,14 +129,17 @@ See the deployment configs: `railway.json` and `vercel.json`.
 | `/whois @user` | View a user's profile |
 | `/ask` | Ask the AI a question |
 | `/suggest` | Submit a feature suggestion |
-| `/admin` | Server configuration (19+ settings) |
-| `/schedule` | Manage scheduled messages |
+| `/poll` | Create a reaction-based poll (up to 20 options) |
 | `/rank [@user]` | View your XP rank |
 | `/leaderboard` | View XP leaderboard |
+| `/birthday set/remove/view` | Manage your birthday |
+| `/next-birthdays` | View upcoming server birthdays |
+| `/admin` | Server configuration (19+ settings) |
+| `/schedule` | Manage scheduled messages |
+| `/xp-admin` | XP system management (status, flush, reset, archives) |
 | `/offtopic` | Random off-topic image/message |
 | `/mod talk` | Send an announcement |
 | `/mod react` | React to a message |
-| `/xp-admin` | XP system management (admin) |
 | `/membercount` | Server member statistics |
 | `/roll` | Roll a d20 |
 | `/latex` | Render LaTeX to image |

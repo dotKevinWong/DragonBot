@@ -4,7 +4,7 @@
 
 ## What Is This Project
 
-DragonBot is a multi-guild Discord bot for university communities. It provides email verification, moderation tools, user profiles, AI Q&A, scheduled messages, audit logging, and a Next.js web dashboard.
+DragonBot is a multi-guild Discord bot for university communities. It provides email verification, moderation tools, user profiles, AI Q&A, XP/leveling, polls, feature suggestions, YouTube upload notifications, scheduled messages, birthday tracking, audit logging, and a Next.js web dashboard.
 
 **Key design constraint:** The bot is fully configurable per-guild. There are zero hardcoded guild, channel, or role IDs anywhere in the codebase. All server-specific settings live in the `guilds` database table and are managed exclusively via the **web dashboard**. Bot commands are read-only or operational — they do not modify guild settings.
 
@@ -88,9 +88,12 @@ interface BotContext {
     scheduledMessage: ScheduledMessageService;
     xp: XpService;
     birthday: BirthdayService;
+    youtube: YouTubeService;
   };
-  scheduler?: SchedulerManager;   // present after startup, absent during early init
-  birthdayChecker?: BirthdayChecker; // present after startup
+  xpArchiveRepo?: XpArchiveRepository; // present after startup
+  scheduler?: SchedulerManager;        // present after startup, absent during early init
+  birthdayChecker?: BirthdayChecker;   // present after startup
+  youtubeChecker?: YouTubeChecker;     // present after startup
 }
 ```
 
@@ -148,7 +151,9 @@ PostgreSQL on Neon. Schema defined in `packages/db/src/schema.ts`. Both apps imp
 - **suggestions** — Feature suggestions with status tracking (`pending` → `approved`/`rejected`/`completed`)
 - **sync_flags** — Internal key/value dirty flags (legacy; cache invalidation now uses the webhook server)
 - **auth_tokens** — One-time tokens for web login (64-char, 5-min expiry, single-use)
-- **user_xp** — Per-guild XP data: `total_xp`, `level`, `message_count`, `xp_message_count`, `last_message_at`. Unique on `(guild_id, discord_id)`.
+- **user_xp** — Per-guild XP data: `total_xp`, `level`, `message_count`, `xp_message_count`, `last_message_at`. Unique on `(guild_id, discord_id)`. Index on `(guild_id, total_xp)` for leaderboard queries.
+- **xp_archives** — XP backup/restore snapshots: `guild_id`, `archived_by`, `reason`, `data` (jsonb array of user XP snapshots), `user_count`, `total_xp_sum`, `restored_at`, `created_at`. Index on `guild_id`.
+- **youtube_subscriptions** — YouTube channel notification subscriptions: `guild_id`, `youtube_channel_id`, `youtube_channel_name`, `notify_channel_id`, `custom_message` (template with `{title}`, `{url}`, `{channel}` placeholders), `last_video_id`, `is_enabled`, `created_at`, `updated_at`. Unique on `(guild_id, youtube_channel_id)`.
 
 Note: Birthday data (`birth_month`, `birth_day`, `birth_year`) is stored on the **users** table as a global per-user property.
 
@@ -178,6 +183,7 @@ Note: Birthday data (`birth_month`, `birth_day`, `birth_year`) is stored on the 
 | Off-Topic | `offtopic_images`, `offtopic_message` |
 | XP / Leveling | `is_xp_enabled`, `xp_min`, `xp_max`, `xp_cooldown_seconds`, `xp_levelup_channel_id`, `xp_excluded_channel_ids[]`, `xp_excluded_role_ids[]` |
 | Birthdays | `is_birthday_enabled`, `birthday_channel_id`, `birthday_message`, `birthday_timezone` |
+| YouTube | `is_youtube_enabled` |
 
 When a setting is null or a feature toggle is false, the feature is simply inactive — no errors, no fallback.
 
@@ -185,7 +191,7 @@ When a setting is null or a feature toggle is false, the feature is simply inact
 
 The `guild_admins` table provides granular permissions for users who don't have Discord's MANAGE_GUILD permission. Available scopes:
 
-`verification`, `welcome`, `logging`, `intro_gate`, `moderation`, `suggestions`, `ai`, `offtopic`, `xp`, `schedules`, `birthday`, `managers`, `*` (wildcard)
+`verification`, `welcome`, `logging`, `intro_gate`, `moderation`, `suggestions`, `ai`, `offtopic`, `xp`, `schedules`, `birthday`, `youtube`, `managers`, `*` (wildcard)
 
 Discord MANAGE_GUILD always grants full access. The `guild_admins` table is additive.
 
@@ -236,9 +242,14 @@ All routes validate input with zod. All return `{ error, code }` on failure.
 - `GET /api/server/[guildId]/leaderboard` — XP leaderboard from DB (paginated, admin auth)
 - `GET/POST /api/server/[guildId]/schedules` — list/create scheduled messages
 - `PATCH/DELETE /api/server/[guildId]/schedules/[scheduleId]` — update/delete a schedule
+- `GET/POST /api/server/[guildId]/suggestions` — list/update suggestions
+- `PATCH/DELETE /api/server/[guildId]/suggestions/[suggestionId]` — update status/archive
+- `GET/POST /api/server/[guildId]/youtube` — list/create YouTube subscriptions
+- `PATCH/DELETE /api/server/[guildId]/youtube/[subscriptionId]` — update/delete subscription
+- `POST /api/server/[guildId]/youtube/resolve` — resolve YouTube URL/handle to channel ID + name
 - `GET /api/leaderboard/[guildId]` — public XP leaderboard (no auth required)
 
-All `[guildId]` path params are validated against `/^[0-9]{17,20}$/` before any DB access. Schedule `[scheduleId]` is validated as a UUID.
+All `[guildId]` path params are validated against `/^[0-9]{17,20}$/` before any DB access. Schedule and subscription `[id]` params are validated as UUIDs.
 
 ### Web UI Features
 
@@ -269,6 +280,35 @@ MEE6-style XP with in-memory caching to minimize DB writes (Neon charges for com
 - **`/rank`, `/leaderboard`:** Served entirely from memory
 - **4-hour flush:** Batch-upserts dirty entries to DB; skipped if nothing changed. Uses `isFlushing` guard + sets `lastFlushAt` synchronously before the async call to prevent races.
 - **Graceful shutdown:** SIGTERM/SIGINT handlers flush before exit
+- **Archives (backup/restore):** `/xp-admin reset-all` archives current XP state to `xp_archives` (jsonb snapshot) before zeroing. `/xp-admin restore <archive_id>` auto-archives current state first (undo is always possible), then restores. `/xp-admin archives` lists the 10 most recent snapshots.
+- **Public leaderboard:** `/api/leaderboard/[guildId]` serves leaderboard data without auth.
+
+### YouTube Notifications
+
+RSS-based YouTube upload notifications managed entirely via the web dashboard. No Google API key required.
+
+- **Subscriptions:** Admins add YouTube channels via the dashboard. The web API resolves YouTube URLs/handles/names to channel IDs by scraping page metadata.
+- **`YouTubeChecker`** runs on a 4-hour interval. Fetches YouTube RSS feeds, deduplicates by `last_video_id`, and posts to the configured Discord channel.
+- **Catch-up mode:** On startup, silently syncs latest video IDs without announcing to avoid duplicate posts after restarts.
+- **Custom messages:** Optional template with `{title}`, `{url}`, `{channel}` placeholders. Default: `**{channel}** just uploaded a new video!\n{url}`.
+- **Guild toggle:** `is_youtube_enabled` master switch. Individual subscriptions also have `is_enabled`.
+
+### Suggestions
+
+Feature suggestion system with Discord submission and web dashboard management.
+
+- **`/suggest <suggestion>`:** Creates a `suggestions` entry and replies with confirmation embed.
+- **Mod notification:** If `mod_notes_channel_id` is configured, posts embed with suggestion text, user info, and thumbs-up/thumbs-down reactions.
+- **Status workflow:** `pending` → `approved` / `rejected` / `completed` / `archived`.
+- **Dashboard UI:** Filter by status, change status, archive/unarchive.
+
+### Polls
+
+Reaction-based polls via `/poll`. Purely client-side — no database, no web dashboard.
+
+- **Yes/No mode:** If no options provided, adds thumbs-up/thumbs-down reactions.
+- **Multi-option:** Up to 20 options with emoji support (Unicode, custom Discord emoji, guild shortcodes, fallback to regional indicators A-T).
+- **No persistence:** Deleting the message loses all vote data.
 
 ### Scheduled Messages
 

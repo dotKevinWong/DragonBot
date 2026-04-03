@@ -8,6 +8,15 @@ const event: BotEvent<"guildMemberUpdate"> = {
   async execute(oldMember: GuildMember | PartialGuildMember, newMember: GuildMember, ctx: BotContext) {
     const guildId = newMember.guild.id;
 
+    // Fetch full member data if old member is uncached to avoid phantom diffs
+    if (oldMember.partial) {
+      try {
+        oldMember = await oldMember.fetch();
+      } catch {
+        return;
+      }
+    }
+
     // Role changes
     if (oldMember.roles.cache.size !== newMember.roles.cache.size) {
       if (await ctx.services.logging.shouldLog(guildId, "role_change")) {

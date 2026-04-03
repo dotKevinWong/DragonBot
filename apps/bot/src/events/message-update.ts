@@ -8,10 +8,29 @@ const event: BotEvent<"messageUpdate"> = {
   async execute(oldMessage: Message | PartialMessage, newMessage: Message | PartialMessage, ctx: BotContext) {
     if (!newMessage.guild) return;
     if (newMessage.author?.bot) return;
-    if (oldMessage.content === newMessage.content) return;
 
-    if (await ctx.services.logging.shouldLog(newMessage.guild.id, "message_edit")) {
-      const guildId = newMessage.guild.id;
+    const guild = newMessage.guild;
+
+    // Fetch full message data if either side is uncached (partial)
+    if (newMessage.partial) {
+      try {
+        newMessage = await newMessage.fetch();
+      } catch {
+        return;
+      }
+    }
+
+    // For uncached old messages, we don't have the pre-edit content.
+    // Check editedTimestamp to confirm this is an actual edit, not just
+    // embed resolution or other non-content updates.
+    if (oldMessage.partial) {
+      if (!newMessage.editedTimestamp) return;
+    } else {
+      if (oldMessage.content === newMessage.content) return;
+    }
+
+    const guildId = guild.id;
+    if (await ctx.services.logging.shouldLog(guildId, "message_edit")) {
 
       const embed = new EmbedBuilder()
         .setColor(0xffcc00)
