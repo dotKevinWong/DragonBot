@@ -1,4 +1,4 @@
-import { EmbedBuilder, type Client, type TextChannel } from "discord.js";
+import { type Client, type TextChannel } from "discord.js";
 import type { Logger } from "pino";
 import type { BirthdayService } from "../services/birthday.service.js";
 import type { GuildService } from "../services/guild.service.js";
@@ -158,11 +158,7 @@ export class BirthdayChecker {
           customMessage,
         );
 
-        const embed = new EmbedBuilder()
-          .setDescription(message)
-          .setColor(0xffd700);
-
-        await textChannel.send({ embeds: [embed] });
+        await textChannel.send(message);
         announced++;
       }
 
