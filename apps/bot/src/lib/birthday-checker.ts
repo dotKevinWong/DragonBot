@@ -17,10 +17,10 @@ export class BirthdayChecker {
 
   /**
    * Run the birthday check for all enabled guilds.
-   * @param catchUp If true, skip the hour check and announce for any missed day (used on startup).
-   *                If false, only announce if the current hour is 9 AM in the guild's timezone.
+   * Announces birthdays after 9 AM in each guild's timezone.
+   * Deduplicates via `lastBirthdayCheckDate` so each day is announced at most once.
    */
-  async check(catchUp = false): Promise<void> {
+  async check(): Promise<void> {
     const log = this.logger.child({ component: "birthday-checker" });
 
     const allGuilds = this.guildService.getAllCached();
@@ -40,10 +40,8 @@ export class BirthdayChecker {
         });
         const currentHour = parseInt(formatter.format(now), 10);
 
-        // Only announce at 9 AM unless catching up after a restart
-        if (!catchUp && currentHour !== 9) continue;
-        // On catch-up, only announce if it's past 9 AM (don't pre-announce before the scheduled time)
-        if (catchUp && currentHour < 9) continue;
+        // Don't announce before 9 AM in the guild's timezone
+        if (currentHour < 9) continue;
 
         // Get today's date in the guild's timezone
         const dateFormatter = new Intl.DateTimeFormat("en-US", {

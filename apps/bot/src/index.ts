@@ -140,7 +140,7 @@ async function main() {
 
     // Birthday checker — runs on startup (catch-up) and via 4-hour sync timer
     const birthdayChecker = new BirthdayChecker(client, birthdayService, guildService, logger);
-    await birthdayChecker.check(true);
+    await birthdayChecker.check();
     ctx.birthdayChecker = birthdayChecker;
     logger.info("Birthday checker initialized");
 
