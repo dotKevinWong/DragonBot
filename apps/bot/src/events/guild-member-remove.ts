@@ -1,6 +1,7 @@
 import { AuditLogEvent, EmbedBuilder, type GuildMember, type PartialGuildMember } from "discord.js";
 import type { BotEvent } from "../types/commands.js";
 import type { BotContext } from "../types/context.js";
+import { findRecentAuditLogEntry, normalizeReason } from "../utils/audit-log.js";
 
 const event: BotEvent<"guildMemberRemove"> = {
   name: "guildMemberRemove",
@@ -13,17 +14,14 @@ const event: BotEvent<"guildMemberRemove"> = {
     let action = "left";
     let executor: string | null = null;
     let executorId: string | null = null;
+    let reason: string | null = null;
 
-    try {
-      const auditLogs = await member.guild.fetchAuditLogs({ limit: 1, type: AuditLogEvent.MemberKick });
-      const kickLog = auditLogs.entries.first();
-      if (kickLog && kickLog.target?.id === member.id && Date.now() - kickLog.createdTimestamp < 5000) {
-        action = "kicked";
-        executor = kickLog.executor?.tag ?? "Unknown";
-        executorId = kickLog.executor?.id ?? null;
-      }
-    } catch {
-      // May not have audit log permissions
+    const kickLog = await findRecentAuditLogEntry(member.guild, AuditLogEvent.MemberKick, member.id);
+    if (kickLog) {
+      action = "kicked";
+      executor = kickLog.executor?.tag ?? "Unknown";
+      executorId = kickLog.executor?.id ?? null;
+      reason = normalizeReason(kickLog.reason);
     }
 
     // Log member_leave
@@ -38,7 +36,10 @@ const event: BotEvent<"guildMemberRemove"> = {
         .addFields({ name: "User", value: `<@${member.id}>` });
 
       if (executor) {
-        embed.addFields({ name: "Kicked by", value: `<@${executorId}> (${executor})` });
+        embed.addFields(
+          { name: "Kicked by", value: `<@${executorId}> (${executor})` },
+          { name: "Reason", value: reason ?? "No reason provided" },
+        );
       }
 
       embed.addFields({
@@ -63,6 +64,7 @@ const event: BotEvent<"guildMemberRemove"> = {
         .addFields(
           { name: "User", value: `<@${member.id}>` },
           { name: "Kicked by", value: `<@${executorId}> (${executor})` },
+          { name: "Reason", value: reason ?? "No reason provided" },
           {
             name: "ID",
             value: `\`\`\`js\nUser: ${member.id}\nModerator: ${executorId ?? "Unknown"}\nGuild: ${guildId}\n\`\`\``,

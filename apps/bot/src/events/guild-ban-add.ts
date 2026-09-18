@@ -1,6 +1,7 @@
 import { EmbedBuilder, type GuildBan } from "discord.js";
 import type { BotEvent } from "../types/commands.js";
 import type { BotContext } from "../types/context.js";
+import { resolveBanReason } from "../utils/audit-log.js";
 
 const event: BotEvent<"guildBanAdd"> = {
   name: "guildBanAdd",
@@ -14,6 +15,7 @@ const event: BotEvent<"guildBanAdd"> = {
     // Log ban
     if (await ctx.services.logging.shouldLog(ban.guild.id, "ban")) {
       const guildId = ban.guild.id;
+      const reason = await resolveBanReason(ban);
       const embed = new EmbedBuilder()
         .setColor(0xff0000)
         .setAuthor({
@@ -23,7 +25,7 @@ const event: BotEvent<"guildBanAdd"> = {
         .setTitle("Member Banned")
         .addFields(
           { name: "User", value: `<@${ban.user.id}>` },
-          { name: "Reason", value: ban.reason ?? "No reason provided" },
+          { name: "Reason", value: reason ?? "No reason provided" },
           {
             name: "ID",
             value: `\`\`\`js\nUser: ${ban.user.id}\nGuild: ${guildId}\n\`\`\``,
