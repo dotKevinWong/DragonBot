@@ -28,6 +28,8 @@ export default function YouTubePage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const [moduleEnabled, setModuleEnabled] = useState(false);
+  const [togglingModule, setTogglingModule] = useState(false);
 
   const [showForm, setShowForm] = useState(false);
   const [formSearch, setFormSearch] = useState("");
@@ -47,13 +49,18 @@ export default function YouTubePage() {
     Promise.all([
       fetch(`/api/server/${guildId}/youtube`, { credentials: "same-origin" }),
       fetch(`/api/server/${guildId}/discord`, { credentials: "same-origin" }),
-    ]).then(async ([ytRes, discordRes]) => {
+      fetch(`/api/server/${guildId}`, { credentials: "same-origin" }),
+    ]).then(async ([ytRes, discordRes, guildRes]) => {
       if (ytRes.status === 401) { window.location.href = "/"; return; }
       if (ytRes.status === 403) { setError("No permission."); setLoading(false); return; }
       if (ytRes.ok) setSubs(await ytRes.json());
       if (discordRes.ok) {
         const data = await discordRes.json();
         setChannels(data.channels ?? []);
+      }
+      if (guildRes.ok) {
+        const guild = await guildRes.json();
+        setModuleEnabled(Boolean(guild.isYoutubeEnabled));
       }
       setLoading(false);
     }).catch(() => { setError("Failed to load."); setLoading(false); });
@@ -115,6 +122,25 @@ export default function YouTubePage() {
       setMessage({ type: "error", text: data.error ?? "Failed to create." });
     }
     setSaving(false);
+  }
+
+  async function handleModuleToggle() {
+    setTogglingModule(true);
+    setMessage(null);
+    const res = await fetch(`/api/server/${guildId}`, {
+      method: "PATCH",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ isYoutubeEnabled: !moduleEnabled }),
+    });
+    if (res.ok) {
+      const guild = await res.json();
+      setModuleEnabled(Boolean(guild.isYoutubeEnabled));
+    } else {
+      const data = await res.json().catch(() => ({}));
+      setMessage({ type: "error", text: data.error ?? "Failed to update YouTube notifications." });
+    }
+    setTogglingModule(false);
   }
 
   async function handleToggle(id: string, currentlyEnabled: boolean) {
@@ -196,6 +222,25 @@ export default function YouTubePage() {
           className="px-4 py-2 bg-dc-accent hover:bg-dc-accent-hover text-white text-sm font-medium rounded-md transition-colors cursor-pointer"
         >
           {showForm ? "Cancel" : "+ Add Channel"}
+        </button>
+      </div>
+
+      <div className="flex items-center justify-between gap-4 bg-dc-bg-secondary border border-dc-border rounded-lg px-5 py-4 mb-6">
+        <div>
+          <p className="text-sm font-medium text-dc-text-primary">Enable YouTube notifications</p>
+          <p className="text-xs text-dc-text-muted mt-0.5">
+            {moduleEnabled
+              ? "New uploads are checked on startup and every 4 hours."
+              : "Subscriptions below won't be checked until this is turned on."}
+          </p>
+        </div>
+        <button
+          onClick={handleModuleToggle}
+          disabled={togglingModule}
+          aria-label="Enable YouTube notifications"
+          className={`relative w-10 h-5 rounded-full transition-colors cursor-pointer shrink-0 disabled:opacity-50 disabled:cursor-not-allowed ${moduleEnabled ? "bg-dc-accent" : "bg-dc-border"}`}
+        >
+          <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-[left] ${moduleEnabled ? "left-[20px]" : "left-0.5"}`} />
         </button>
       </div>
 
