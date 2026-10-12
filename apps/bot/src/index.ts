@@ -144,9 +144,10 @@ async function main() {
     ctx.birthdayChecker = birthdayChecker;
     logger.info("Birthday checker initialized");
 
-    // YouTube checker — runs on startup (catch-up) and via 4-hour sync timer
+    // YouTube checker — runs on startup and via 4-hour sync timer. Each run announces every
+    // video newer than the last one seen, so restarts and the long interval don't drop uploads.
     const youtubeChecker = new YouTubeChecker(client, youtubeService, youtubeRepo, guildService, logger);
-    await youtubeChecker.check(true);
+    await youtubeChecker.check();
     ctx.youtubeChecker = youtubeChecker;
     logger.info("YouTube checker initialized");
 
