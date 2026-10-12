@@ -1,13 +1,9 @@
-import type { Client } from "discord.js";
-import type { GuildRepository } from "../repositories/guild.repository.js";
-import type { UserRepository } from "../repositories/user.repository.js";
+import { DiscordAPIError, RESTJSONErrorCodes, type Client } from "discord.js";
+import type { GuildService } from "./guild.service.js";
 import type { Logger } from "pino";
 
 export class ModerationService {
-  constructor(
-    private guildRepo: GuildRepository,
-    private userRepo: UserRepository,
-  ) {}
+  constructor(private guildService: GuildService) {}
 
   async syncBan(
     userId: string,
@@ -15,9 +11,7 @@ export class ModerationService {
     client: Client,
     logger: Logger,
   ): Promise<number> {
-    await this.userRepo.markBanned(userId, sourceGuildId);
-
-    const banSyncGuilds = await this.guildRepo.findAllWithBanSync();
+    const banSyncGuilds = await this.guildService.getAllBanSyncGuilds();
     let bannedCount = 0;
 
     for (const guildConfig of banSyncGuilds) {
@@ -29,6 +23,15 @@ export class ModerationService {
         bannedCount++;
         logger.info({ userId, guildId: guildConfig.guildId }, "Ban synced to guild");
       } catch (err) {
+        // The bot was removed from this guild (or it was deleted) — stop trying to sync to it
+        if (err instanceof DiscordAPIError && err.code === RESTJSONErrorCodes.UnknownGuild) {
+          await this.guildService.disableBanSync(guildConfig.guildId);
+          logger.info(
+            { userId, guildId: guildConfig.guildId },
+            "Bot is no longer in guild — disabled ban sync for it",
+          );
+          continue;
+        }
         logger.warn(
           { err, userId, guildId: guildConfig.guildId },
           "Failed to sync ban to guild",

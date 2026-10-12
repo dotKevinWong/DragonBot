@@ -55,6 +55,13 @@ export class GuildService {
     return this.repo.findAllWithBanSync();
   }
 
+  /** Turn off ban sync for a guild the bot can no longer reach. No-op if the guild has no row. */
+  async disableBanSync(guildId: string) {
+    const result = await this.repo.updateSettings(guildId, { isBanSyncEnabled: false });
+    this.cache.invalidate(guildId);
+    return result;
+  }
+
   /** Manually invalidate cache for a guild (e.g., after web dashboard changes) */
   invalidateCache(guildId: string): void {
     this.cache.invalidate(guildId);

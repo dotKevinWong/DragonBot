@@ -73,7 +73,7 @@ async function main() {
   const verificationService = new VerificationService(verificationRepo, guildRepo, userRepo, email);
   const authService = new AuthService(authRepo, config.JWT_SECRET);
   const suggestionService = new SuggestionService(suggestionRepo, guildRepo);
-  const moderationService = new ModerationService(guildRepo, userRepo);
+  const moderationService = new ModerationService(guildService);
   const loggingService = new LoggingService(guildService);
   const guildAdminService = new GuildAdminService(guildAdminRepo);
   const scheduledMessageRepo = new ScheduledMessageRepository(db);
