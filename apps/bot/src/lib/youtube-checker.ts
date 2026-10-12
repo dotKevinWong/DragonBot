@@ -10,7 +10,7 @@ const MAX_ANNOUNCEMENTS_PER_CHECK = 5;
 const MAX_ANNOUNCE_AGE_MS = 3 * 24 * 60 * 60 * 1000;
 
 /**
- * YouTube checker — called on startup and on its own polling interval.
+ * YouTube checker — called on startup and via the 4-hour sync timer.
  * No internal cron; scheduling is handled externally.
  */
 export class YouTubeChecker {

@@ -144,16 +144,11 @@ async function main() {
     ctx.birthdayChecker = birthdayChecker;
     logger.info("Birthday checker initialized");
 
-    // YouTube checker — runs on startup and on its own 15-minute timer (RSS feeds are cheap
-    // and YouTube drops entries quickly, so the 4-hour sync is too slow for new uploads)
+    // YouTube checker — runs on startup and via 4-hour sync timer. Each run announces every
+    // video newer than the last one seen, so restarts and the long interval don't drop uploads.
     const youtubeChecker = new YouTubeChecker(client, youtubeService, youtubeRepo, guildService, logger);
     await youtubeChecker.check();
     ctx.youtubeChecker = youtubeChecker;
-    const YOUTUBE_INTERVAL_MS = 15 * 60 * 1000;
-    const youtubeTimer = setInterval(() => {
-      youtubeChecker.check().catch((err) => logger.error({ err }, "YouTube check failed"));
-    }, YOUTUBE_INTERVAL_MS);
-    if (youtubeTimer.unref) youtubeTimer.unref();
     logger.info("YouTube checker initialized");
 
     // Start webhook server for instant cache invalidation from web dashboard
@@ -175,7 +170,8 @@ async function main() {
         await guildService.hydrateAll();
         await scheduler.reload();
         await birthdayChecker.check();
-        logger.info("Periodic sync complete (XP flush + guild settings + schedule reload + birthday check)");
+        await youtubeChecker.check();
+        logger.info("Periodic sync complete (XP flush + guild settings + schedule reload + birthday check + YouTube check)");
       } catch (err) {
         logger.error({ err }, "Periodic sync failed");
       }
