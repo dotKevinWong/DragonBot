@@ -574,8 +574,6 @@ export default function ServerSettingsPage() {
       introMinSubstantiveWords: settings.introMinSubstantiveWords,
       introUniqueWordRatio: settings.introUniqueWordRatio,
       introMaxRepeatedCharPct: settings.introMaxRepeatedCharPct,
-      isHoneypotEnabled: settings.isHoneypotEnabled,
-      honeypotAction: settings.honeypotAction,
       isSuggestionsEnabled: settings.isSuggestionsEnabled,
       isAskEnabled: settings.isAskEnabled,
       askSystemPrompt: settings.askSystemPrompt,
@@ -592,6 +590,17 @@ export default function ServerSettingsPage() {
       birthdayTimezone: settings.birthdayTimezone,
     };
 
+    // Send the honeypot fields only when this tab changed them, so a tab loaded before another admin's change
+    // can't turn the honeypot back on, or put back an old action or channel, on an unrelated save. A save that
+    // turns the honeypot on sends all three, so what gets armed is what this tab shows.
+    const turnsHoneypotOn = settings.isHoneypotEnabled && !savedSettings?.isHoneypotEnabled;
+    if (settings.isHoneypotEnabled !== savedSettings?.isHoneypotEnabled) {
+      updateFields.isHoneypotEnabled = settings.isHoneypotEnabled;
+    }
+    if (turnsHoneypotOn || settings.honeypotAction !== savedSettings?.honeypotAction) {
+      updateFields.honeypotAction = settings.honeypotAction;
+    }
+
     // Only include role/channel IDs if we successfully loaded Discord data
     // (prevents overwriting with null when API was rate-limited)
     if (hasDiscordData) {
@@ -604,7 +613,9 @@ export default function ServerSettingsPage() {
       updateFields.xpLevelupChannelId = settings.xpLevelupChannelId;
       updateFields.birthdayChannelId = settings.birthdayChannelId;
       updateFields.birthdayRoleId = settings.birthdayRoleId;
-      updateFields.honeypotChannelId = settings.honeypotChannelId;
+      if (turnsHoneypotOn || settings.honeypotChannelId !== savedSettings?.honeypotChannelId) {
+        updateFields.honeypotChannelId = settings.honeypotChannelId;
+      }
     }
 
     const res = await fetch(`/api/server/${guildId}`, {
@@ -642,7 +653,8 @@ export default function ServerSettingsPage() {
   ];
 
   const textChannels = channels.filter((c) => c.type === "text" || c.type === "announcement");
-  const canEnableHoneypot = hasDiscordData && textChannels.some((c) => c.id === settings.honeypotChannelId);
+  // The same filter the honeypot channel picker uses, so the guard accepts only a channel the picker can show
+  const canEnableHoneypot = hasDiscordData && channels.some((c) => c.type === "text" && c.id === settings.honeypotChannelId);
 
   return (
     <div className="max-w-2xl">
@@ -767,7 +779,7 @@ export default function ServerSettingsPage() {
           }}
         />
         {showHoneypotChannelHint && !canEnableHoneypot && <p className="text-xs text-dc-danger">Pick a channel first.</p>}
-        <ChannelSelect label="Honeypot Channel" value={settings.honeypotChannelId} onChange={(v) => update("honeypotChannelId", v)} channels={channels} filterType="text" showUnknown />
+        <ChannelSelect label="Honeypot Channel" value={settings.honeypotChannelId} onChange={(v) => { setShowHoneypotChannelHint(false); update("honeypotChannelId", v); }} channels={channels} filterType="text" showUnknown />
         <div>
           <label className="block text-xs font-semibold text-dc-text-secondary uppercase tracking-wide mb-1.5">Action</label>
           <select
@@ -888,7 +900,7 @@ export default function ServerSettingsPage() {
           <span className="text-sm text-dc-text-primary">Careful — you have unsaved changes!</span>
           <button
             type="button"
-            onClick={() => { setSettings(savedSettings); setMessage(null); }}
+            onClick={() => { setSettings(savedSettings); setMessage(null); setShowHoneypotChannelHint(false); }}
             className="text-sm text-dc-text-secondary hover:text-dc-text-primary transition-colors cursor-pointer"
           >
             Reset
