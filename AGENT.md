@@ -196,7 +196,7 @@ The `guild_admins` table provides granular permissions for users who don't have 
 
 `verification`, `welcome`, `logging`, `intro_gate`, `moderation`, `suggestions`, `ai`, `offtopic`, `xp`, `schedules`, `birthday`, `youtube`, `managers`, `*` (wildcard)
 
-Discord MANAGE_GUILD always grants full access. The `guild_admins` table is additive.
+The server owner and members with Administrator or Manage Server always get full access. The `guild_admins` table is additive.
 
 The honeypot fields (`is_honeypot_enabled`, `honeypot_channel_id`, `honeypot_action`) need full access: MANAGE_GUILD or a `guild_admins` row holding `*`. They decide who gets kicked or banned, so the `moderation` scope isn't enough.
 

@@ -3,15 +3,18 @@ import { guildAdmins } from "@dragonbot/db/schema";
 import { env } from "./env";
 import { db } from "./db";
 
+/** A member as `GET /guilds/{id}/members/{userId}` returns it: no `permissions`, which Discord sends only in interactions. */
 interface DiscordGuildMember {
   user: { id: string };
   roles: string[];
-  permissions: string;
+  communication_disabled_until?: string | null;
 }
 
+/** A guild as `GET /guilds/{id}` returns it. Each role's `permissions` is a decimal string. */
 interface DiscordGuild {
   owner_id: string;
   icon: string | null;
+  roles: { id: string; permissions: string }[];
 }
 
 interface DiscordUser {
@@ -62,33 +65,51 @@ export async function getGuildIconUrl(guildId: string): Promise<string | null> {
   }
 }
 
-/** Check if a user has Discord's MANAGE_GUILD permission (owner or permission bit) */
+const ADMINISTRATOR = BigInt(1) << BigInt(3);
+const MANAGE_GUILD = BigInt(1) << BigInt(5);
+
+/**
+ * Check if a user is the server owner or has Administrator or Manage Server.
+ *
+ * The member's server-wide permissions are the @everyone role's (its ID is the guild ID) ORed with those of each of
+ * their roles; role IDs the guild doesn't list are skipped. A timed-out member keeps only Administrator. Any failed
+ * fetch or error refuses access. Two Discord calls: the guild, then the member.
+ */
 async function checkDiscordManageGuild(
   guildId: string,
   userId: string,
 ): Promise<boolean> {
   try {
-    // Check if user is guild owner
-    const guildRes = await fetch(`https://discord.com/api/v10/guilds/${guildId}`, {
-      headers: { Authorization: `Bot ${env.DISCORD_API_TOKEN}` },
-    });
+    const headers = { Authorization: `Bot ${env.DISCORD_API_TOKEN}` };
 
-    if (guildRes.ok) {
-      const guild = (await guildRes.json()) as DiscordGuild;
-      if (guild.owner_id === userId) return true;
-    }
+    const guildRes = await fetch(`https://discord.com/api/v10/guilds/${guildId}`, { headers });
+    if (!guildRes.ok) return false;
 
-    // Check member permissions
+    const guild = (await guildRes.json()) as DiscordGuild;
+    if (guild.owner_id === userId) return true;
+
     const memberRes = await fetch(
       `https://discord.com/api/v10/guilds/${guildId}/members/${userId}`,
-      { headers: { Authorization: `Bot ${env.DISCORD_API_TOKEN}` } },
+      { headers },
     );
-
     if (!memberRes.ok) return false;
 
     const member = (await memberRes.json()) as DiscordGuildMember;
-    const permissions = BigInt(member.permissions);
-    const MANAGE_GUILD = BigInt(1 << 5);
+    const memberRoleIds = new Set(member.roles);
+    let permissions = BigInt(0);
+    for (const role of guild.roles) {
+      if (role.id === guildId || memberRoleIds.has(role.id)) {
+        permissions |= BigInt(role.permissions);
+      }
+    }
+
+    if ((permissions & ADMINISTRATOR) === ADMINISTRATOR) return true;
+
+    // Discord limits a timed-out member to View Channels and Read Message History
+    const timedOutUntil = member.communication_disabled_until
+      ? Date.parse(member.communication_disabled_until)
+      : NaN;
+    if (timedOutUntil > Date.now()) return false;
 
     return (permissions & MANAGE_GUILD) === MANAGE_GUILD;
   } catch {
@@ -99,7 +120,7 @@ async function checkDiscordManageGuild(
 /**
  * Check if a user has permission to manage a guild.
  *
- * 1. Discord MANAGE_GUILD always grants full access.
+ * 1. The server owner, Administrator or Manage Server always grants full access.
  * 2. Otherwise, check the guild_admins table for custom permissions.
  *
  * @param scope - If provided, checks for a specific permission scope.
@@ -110,7 +131,7 @@ export async function checkGuildPermission(
   userId: string,
   scope?: string,
 ): Promise<boolean> {
-  // Discord MANAGE_GUILD always grants full access
+  // The server owner, Administrator or Manage Server always grants full access
   const hasManageGuild = await checkDiscordManageGuild(guildId, userId);
   if (hasManageGuild) return true;
 
@@ -139,7 +160,7 @@ export async function checkGuildPermission(
 
 /**
  * Get the list of permission scopes a user has for a guild.
- * Returns ["*"] for Discord MANAGE_GUILD holders.
+ * Returns ["*"] for the server owner, Administrator or Manage Server.
  * Returns empty array if no permissions.
  */
 export async function getUserGuildPermissions(
