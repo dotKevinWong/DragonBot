@@ -1,7 +1,8 @@
-import { type Client, type TextChannel } from "discord.js";
+import { type Client } from "discord.js";
 import type { Logger } from "pino";
 import type { BirthdayService } from "../services/birthday.service.js";
 import type { GuildService } from "../services/guild.service.js";
+import { fetchGuildTextChannel } from "../utils/guild-channel.js";
 
 /**
  * Birthday checker — called on startup (catch-up) and via the 4-hour sync timer.
@@ -132,12 +133,11 @@ export class BirthdayChecker {
       const members = await discordGuild.members.fetch({ user: birthdayDiscordIds }).catch(() => null);
       if (!members || members.size === 0) return;
 
-      const channel = await this.client.channels.fetch(channelId).catch(() => null);
-      if (!channel || !channel.isTextBased()) {
+      const channel = await fetchGuildTextChannel(this.client, guildId, channelId, guildLog).catch(() => null);
+      if (!channel) {
         guildLog.warn("Birthday channel not found or not text-based");
         return;
       }
-      const textChannel = channel as TextChannel;
 
       let announced = 0;
       for (const birthday of birthdayUsers) {
@@ -158,7 +158,7 @@ export class BirthdayChecker {
           customMessage,
         );
 
-        await textChannel.send(message);
+        await channel.send(message);
         announced++;
       }
 

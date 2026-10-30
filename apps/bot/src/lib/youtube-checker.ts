@@ -1,8 +1,9 @@
-import type { Client, TextChannel } from "discord.js";
+import type { Client } from "discord.js";
 import type { Logger } from "pino";
 import type { YouTubeService } from "../services/youtube.service.js";
 import type { YouTubeRepository } from "../repositories/youtube.repository.js";
 import type { GuildService } from "../services/guild.service.js";
+import { fetchGuildTextChannel } from "../utils/guild-channel.js";
 
 /**
  * YouTube checker — called on startup (catch-up) and via the 4-hour sync timer.
@@ -83,8 +84,8 @@ export class YouTubeChecker {
     customMessage: string | null,
     log: Logger,
   ): Promise<void> {
-    const channel = await this.client.channels.fetch(channelId).catch(() => null);
-    if (!channel || !channel.isTextBased()) {
+    const channel = await fetchGuildTextChannel(this.client, guildId, channelId, log).catch(() => null);
+    if (!channel) {
       log.warn({ guildId, channelId }, "YouTube notify channel not found or not text-based");
       return;
     }
@@ -92,7 +93,7 @@ export class YouTubeChecker {
     const message = this.youtubeService.buildNotificationMessage(video, customMessage);
 
     // Send as plain text so Discord auto-embeds the YouTube link preview
-    await (channel as TextChannel).send(message);
+    await channel.send(message);
 
     log.info(
       { guildId, videoId: video.id, title: video.title },

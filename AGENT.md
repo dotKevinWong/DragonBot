@@ -392,6 +392,7 @@ Config files: `railway.json`, `vercel.json`
 - **Permission checks in commands.** Admin/mod commands must verify Discord permissions or guild_admins status in the handler — never rely solely on Discord's built-in command permissions.
 - **AI prompt injection.** The `/ask` endpoint passes user input to OpenAI. System prompts must not contain secrets or internal implementation details. Sanitize or truncate excessively long inputs.
 - **Email domain allowlist.** Verification is restricted to `drexel.edu` and `dragons.drexel.edu` in the service layer. Never add wildcard patterns.
+- **Settings channels stay in their own server.** Fetch a channel named in a server's settings with `fetchGuildTextChannel` (`apps/bot/src/utils/guild-channel.ts`) or `guild.channels.fetch`, never bare `client.channels.fetch`. Settings hold bare channel IDs, and `client.channels.fetch` finds a channel in any server DragonBot is in, so one server's messages could land in another server's channel.
 
 ### Environment & Deployment
 

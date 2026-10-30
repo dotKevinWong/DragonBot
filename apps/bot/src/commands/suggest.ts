@@ -1,8 +1,9 @@
-import { SlashCommandBuilder, EmbedBuilder, type ChatInputCommandInteraction, type TextChannel } from "discord.js";
+import { SlashCommandBuilder, EmbedBuilder, type ChatInputCommandInteraction } from "discord.js";
 import type { BotContext } from "../types/context.js";
 import type { BotCommand } from "../types/commands.js";
 import { AppError } from "../types/errors.js";
 import { errorEmbed } from "../utils/embeds.js";
+import { fetchGuildTextChannel } from "../utils/guild-channel.js";
 
 const command: BotCommand = {
   data: new SlashCommandBuilder()
@@ -40,8 +41,13 @@ const command: BotCommand = {
       const guild = await ctx.services.guild.getSettings(interaction.guildId);
       if (guild?.modNotesChannelId) {
         try {
-          const channel = await interaction.client.channels.fetch(guild.modNotesChannelId);
-          if (channel?.isTextBased()) {
+          const channel = await fetchGuildTextChannel(
+            interaction.client,
+            interaction.guildId,
+            guild.modNotesChannelId,
+            ctx.logger,
+          );
+          if (channel) {
             const modEmbed = new EmbedBuilder()
               .setColor(0xffcc00)
               .setTitle("New Suggestion")
@@ -52,7 +58,7 @@ const command: BotCommand = {
               )
               .setFooter({ text: `ID: ${record.id}` })
               .setTimestamp();
-            const msg = await (channel as TextChannel).send({ embeds: [modEmbed] });
+            const msg = await channel.send({ embeds: [modEmbed] });
             await msg.react("👍");
             await msg.react("👎");
           }

@@ -1,7 +1,8 @@
 import cron, { type ScheduledTask } from "node-cron";
-import { EmbedBuilder, type Client, type TextChannel } from "discord.js";
+import { EmbedBuilder, type Client } from "discord.js";
 import type { Logger } from "pino";
 import type { ScheduledMessageService } from "../services/scheduled-message.service.js";
+import { fetchGuildTextChannel } from "../utils/guild-channel.js";
 
 interface ScheduledMessageRow {
   id: string;
@@ -128,21 +129,19 @@ export class SchedulerManager {
     const log = this.logger.child({ scheduleId: schedule.id, guildId: schedule.guildId });
 
     try {
-      const channel = await this.client.channels.fetch(schedule.channelId);
-      if (!channel || !channel.isTextBased()) {
+      const channel = await fetchGuildTextChannel(this.client, schedule.guildId, schedule.channelId, log);
+      if (!channel) {
         log.warn("Channel not found or not text-based");
         return;
       }
-
-      const textChannel = channel as TextChannel;
 
       if (schedule.isEmbed) {
         const embed = new EmbedBuilder().setDescription(schedule.message);
         if (schedule.embedTitle) embed.setTitle(schedule.embedTitle);
         embed.setColor(schedule.embedColor ? parseInt(schedule.embedColor.replace("#", ""), 16) : 0x5865f2);
-        await textChannel.send({ embeds: [embed] });
+        await channel.send({ embeds: [embed] });
       } else {
-        await textChannel.send(schedule.message);
+        await channel.send(schedule.message);
       }
 
       // Fire-and-forget lastRun update — don't block message sending on DB write

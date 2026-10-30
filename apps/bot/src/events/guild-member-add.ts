@@ -1,6 +1,7 @@
-import { type GuildMember, type TextChannel, EmbedBuilder } from "discord.js";
+import { type GuildMember, EmbedBuilder } from "discord.js";
 import type { BotEvent } from "../types/commands.js";
 import type { BotContext } from "../types/context.js";
+import { fetchGuildTextChannel } from "../utils/guild-channel.js";
 
 const event: BotEvent<"guildMemberAdd"> = {
   name: "guildMemberAdd",
@@ -27,13 +28,13 @@ const event: BotEvent<"guildMemberAdd"> = {
     // Welcome message
     if (guild.isWelcomeEnabled && guild.welcomeChannelId && guild.welcomeMessage) {
       try {
-        const channel = await member.client.channels.fetch(guild.welcomeChannelId);
-        if (channel?.isTextBased()) {
+        const channel = await fetchGuildTextChannel(member.client, member.guild.id, guild.welcomeChannelId, log);
+        if (channel) {
           const message = guild.welcomeMessage
             .replace(/\\n/g, "\n")
             .replace(/{member}/g, `<@${member.id}>`)
             .replace(/{server}/g, member.guild.name);
-          await (channel as TextChannel).send(message);
+          await channel.send(message);
         }
       } catch (err) {
         log.warn({ err }, "Failed to send welcome message");
