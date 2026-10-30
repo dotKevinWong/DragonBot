@@ -792,6 +792,7 @@ export default function ServerSettingsPage() {
           </select>
         </div>
         <div className="border-t border-dc-border pt-3 mt-1 space-y-1 text-xs text-dc-text-muted">
+          <p>Changing these settings needs Manage Server or full dashboard access.</p>
           <p>Their messages from the last hour are cleaned up across the whole server either way.</p>
           <p>Verified members only have the message deleted. Staff (Administrator, Manage Server, Kick Members or Ban Members) are ignored.</p>
           <p>Honeypot bans are never copied to other servers by ban sync.</p>

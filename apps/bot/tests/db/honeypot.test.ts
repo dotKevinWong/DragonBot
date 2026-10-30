@@ -1,5 +1,15 @@
 import { describe, it, expect } from "vitest";
-import { findHoneypotChannelConflict } from "@dragonbot/db";
+import { FIELD_SCOPE_MAP, findHoneypotChannelConflict } from "@dragonbot/db";
+
+describe("honeypot field scopes", () => {
+  it("needs full access for the honeypot fields and keeps the other moderation fields on moderation", () => {
+    expect(FIELD_SCOPE_MAP.isHoneypotEnabled).toBe("*");
+    expect(FIELD_SCOPE_MAP.honeypotChannelId).toBe("*");
+    expect(FIELD_SCOPE_MAP.honeypotAction).toBe("*");
+    expect(FIELD_SCOPE_MAP.isBanSyncEnabled).toBe("moderation");
+    expect(FIELD_SCOPE_MAP.modNotesChannelId).toBe("moderation");
+  });
+});
 
 describe("findHoneypotChannelConflict", () => {
   it("finds no conflict when the honeypot channel is unset or unique", () => {

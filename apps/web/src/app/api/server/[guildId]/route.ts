@@ -88,7 +88,7 @@ export async function PATCH(
     if (missingScopes.length > 0) {
       return NextResponse.json(
         {
-          error: `You don't have permission to modify these settings. Missing scopes: ${missingScopes.join(", ")}`,
+          error: `You don't have permission to modify these settings. Missing scopes: ${missingScopes.map((scope) => (scope === "*" ? "full access" : scope)).join(", ")}`,
           code: "UNAUTHORIZED",
         },
         { status: 403 },

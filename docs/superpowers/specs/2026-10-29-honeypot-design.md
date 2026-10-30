@@ -76,7 +76,7 @@ The help text under the controls (from the mockup) says:
 
 The honeypot is **configured** when it is enabled and a channel is set. It is **armed** (enforcing) only when the warning is also in place. See "No warning, no enforcement" below.
 
-**Who can change these settings:** the fields map to the existing `moderation` permission scope in `FIELD_SCOPE_MAP`. *(my call)*
+**Who can change these settings:** only managers with full access, meaning Discord's Manage Server permission (the dashboard turns it into `*`) or a `guild_admins` row holding `*`. The three fields map to `*` in `FIELD_SCOPE_MAP`, and the card's help text says so. *(Kevin, 2026-10-30: the same people who can edit the server settings. The honeypot decides who gets kicked or banned, so a manager with only the `moderation` scope could point it at a busy channel and get ordinary members removed.)*
 
 ### The pinned warning (style B, approved)
 
@@ -372,7 +372,7 @@ Kevin runs the push himself, because it's the production database.
 1. The default action for a new setup is **Kick**.
 2. "Verified" means the member has **this server's verification role**.
 3. The honeypot deletion entry follows the existing **`message_delete`** log toggle. Failure notices always go to the log channel when logging is on.
-4. The dashboard fields use the **`moderation`** permission scope.
+4. The dashboard fields need **full access** (Manage Server or `*`). Kevin decided this on 2026-10-30, replacing my call of the `moderation` scope, because these fields decide who gets kicked or banned.
 5. Threads under the honeypot channel are **not** covered.
 6. A kick-mode honeypot action doesn't mark the user as banned in DragonBot's records. A ban-mode action does, as any ban does today.
 7. Only one honeypot channel per server.
@@ -411,3 +411,4 @@ The build departed from the approved design in these places. The text above was 
 - **Ruling 33, the dashboard sends only what changed:** this replaces "always send `isHoneypotEnabled` and `honeypotAction`". A stale tab's unrelated save had turned a deliberately disabled honeypot back on, or switched Kick back to Ban. The enable guard also counts text channels only, and the "Pick a channel first." hint clears on Reset and on a channel change.
 - **Ruling 34, `/admin reload` syncs one server:** any manager with any scope in one server made every server's warning sync run. The webhook's full reload and the 4-hour sync still cover every server.
 - **Task 5 pre-flight ruling, a rejoin is a new case:** `messageCreate` runs the honeypot handler before the late-message check, so a kicked account that rejoins and posts in the honeypot within 2 minutes is removed again and logged, not silently deleted.
+- **Kevin's decision on 2026-10-30, full access for the honeypot settings:** the three fields need Manage Server or `*` instead of the `moderation` scope, and the `PATCH`'s 403 names `*` as "full access". A manager with only `moderation` could point the honeypot at a busy channel and get ordinary members kicked or banned.

@@ -198,7 +198,7 @@ The `guild_admins` table provides granular permissions for users who don't have 
 
 Discord MANAGE_GUILD always grants full access. The `guild_admins` table is additive.
 
-The honeypot fields (`is_honeypot_enabled`, `honeypot_channel_id`, `honeypot_action`) use the `moderation` scope, like ban sync and the mod notes channel.
+The honeypot fields (`is_honeypot_enabled`, `honeypot_channel_id`, `honeypot_action`) need full access: MANAGE_GUILD or a `guild_admins` row holding `*`. They decide who gets kicked or banned, so the `moderation` scope isn't enough.
 
 ## Environment Variables
 
@@ -290,7 +290,7 @@ MEE6-style XP with in-memory caching to minimize DB writes (Neon charges for com
 
 ### Honeypot
 
-A per-server trap channel for spam waves: DragonBot keeps a pinned warning in it and removes ordinary accounts that post there. The Honeypot card sets the three settings in the config table (`moderation` scope; the action defaults to `kick`). Only the bot writes `honeypot_warning_channel_id` and `honeypot_warning_message_id`; the `PATCH` never accepts them. A *notice* is a message in the log channel.
+A per-server trap channel for spam waves: DragonBot keeps a pinned warning in it and removes ordinary accounts that post there. The Honeypot card sets the three settings in the config table (full access only: Manage Server or `*`; the action defaults to `kick`). Only the bot writes `honeypot_warning_channel_id` and `honeypot_warning_message_id`; the `PATCH` never accepts them. A *notice* is a message in the log channel.
 
 - **Who triggers what:** `messageCreate` checks the honeypot channel before the intro gate and XP, so a honeypot post earns no XP. System, webhook and bot messages, threads and the System Messages channel are ignored. **Staff** (Administrator, Manage Server, Kick Members or Ban Members, nothing else) are ignored completely. A **verified** member (has `verification_role_id`; none set means nobody is) only has the message deleted and logged. Everyone else is kicked or banned, with the message and their last hour deleted. A failed member lookup removes nobody (it might be staff); an author who left is still removed by ID.
 - **No warning, no enforcement:** a post is acted on only if the honeypot is enabled with a channel, the stored warning channel equals it, a warning ID is stored and the post is newer than the warning (pinned isn't required). Before it deletes a honeypot post or removes anyone, it re-reads the row from the database, since the cache can be stale (the late-message deletions and the sweep only follow a removal that passed). The bot refuses to arm in the System Messages channel, in a channel another setting uses (`findHoneypotChannelConflict`), or when the channel's resolved ID differs from the stored string: the sync removes any stored warning, clears the IDs and sends a notice.
