@@ -136,6 +136,15 @@ function honeypotRow(overrides: Record<string, unknown> = {}): GuildRow {
   } as unknown as GuildRow;
 }
 
+/** Fresh rows under which the honeypot no longer acts in trap, whatever the cached row says. null: the row is gone. */
+const DISARMED_ROWS: (Record<string, unknown> | null)[] = [
+  { isHoneypotEnabled: false },
+  { honeypotChannelId: "another-channel" },
+  { honeypotWarningChannelId: null, honeypotWarningMessageId: null },
+  { honeypotAction: "mute" },
+  null,
+];
+
 /**
  * The honeypot service is the real one; the log sink, the settings read and Discord are fakes.
  * The database agrees with the cached row unless `fresh` changes it; a null `fresh` means the row is gone.
@@ -275,7 +284,7 @@ describe("handleHoneypotMessage", () => {
       PermissionFlagsBits.BanMembers,
     ];
     for (const permission of staffPermissions) {
-      const { guild, logging, run } = setup({ row: { honeypotAction: "ban" } });
+      const { guild, logging, guildService, run } = setup({ row: { honeypotAction: "ban" } });
       const message = fakeMessage(guild, { member: fakeMember({ permissions: [permission] }) });
 
       // "handled", so a staff post in the honeypot earns no XP either.
@@ -285,6 +294,8 @@ describe("handleHoneypotMessage", () => {
       expect(logging.sendLogEmbed).not.toHaveBeenCalled();
       expect(logging.sendNotice).not.toHaveBeenCalled();
       expect(guild.members.ban).not.toHaveBeenCalled();
+      // Staff are left alone before the settings re-read.
+      expect(guildService.getSettingsFresh).not.toHaveBeenCalled();
     }
   });
 
@@ -487,6 +498,27 @@ describe("handleHoneypotMessage", () => {
     expect(leftover.delete).not.toHaveBeenCalled();
   });
 
+  it("reports still banned after an uncertain ban whose unban fails", async () => {
+    const { guild, honeypot, logging, run } = setup({ row: { honeypotAction: "kick" } });
+    const leftover = cachedMessage("left-1", "u1", T0 - 60_000);
+    guild.channels.cache.set("general", fakeTextChannel("general", [leftover]));
+    guild.members.ban.mockRejectedValue(serverError(500));
+    // Not banned before the ban; the check after it fails too, so nobody can tell whether the ban happened.
+    guild.bans.fetch.mockRejectedValueOnce(unknownBan()).mockRejectedValueOnce(serverError(500));
+    guild.bans.remove.mockRejectedValue(serverError(500));
+
+    await expect(run(fakeMessage(guild))).resolves.toBe("handled");
+
+    expect(guild.bans.remove).toHaveBeenCalledTimes(2);
+    const stuck = "Kicked, but the unban failed: Internal Server Error. They are still banned and need a manual unban.";
+    expect(loggedActions(logging)).toEqual([stuck]);
+    expect(notices(logging)).toEqual([`<@u1> (u1) posted in the honeypot <#trap>. ${stuck}`]);
+    // The ban was never confirmed: no late window, and no sweep.
+    expect(honeypot.isWithinLateWindow("g1", "u1")).toBe(false);
+    await vi.advanceTimersByTimeAsync(SWEEP_DELAY_MS);
+    expect(leftover.delete).not.toHaveBeenCalled();
+  });
+
   it("never bans for a case that timed out before its record", async () => {
     const { guild, honeypot, logging, run } = setup({ row: { honeypotAction: "kick" } });
     // The already-banned check sits in a backed-up queue until the case has timed out.
@@ -553,7 +585,25 @@ describe("handleHoneypotMessage", () => {
     expect(guild.bans.remove).not.toHaveBeenCalled();
     expect(loggedActions(logging)).toEqual(["Message deleted only. Couldn't check membership, so nobody was removed."]);
     expect(logging.sendNotice).toHaveBeenCalledTimes(1);
-    expect(notices(logging)[0]).toContain("Service Unavailable");
+    expect(notices(logging)).toEqual([
+      "<@u1> (u1) posted in the honeypot <#trap>. " +
+        "Message deleted only. Couldn't check membership (Service Unavailable), so nobody was removed.",
+    ]);
+  });
+
+  it("fetches the member when the gateway payload has none", async () => {
+    const { guild, honeypot, logging, run } = setup({ row: { honeypotAction: "ban" } });
+    const message = fakeMessage(guild, { member: null });
+
+    await expect(run(message)).resolves.toBe("handled");
+
+    expect(guild.members.fetch).toHaveBeenCalledTimes(1);
+    expect(guild.members.fetch).toHaveBeenCalledWith("u1");
+    expect(message.delete).toHaveBeenCalledTimes(1);
+    expect(guild.members.ban).toHaveBeenCalledTimes(1);
+    // A member, not an account that already left: the log claims the cleanup, and their departure matches the ban.
+    expect(loggedActions(logging)).toEqual(["Banned. Their messages from the last hour were cleaned up."]);
+    expect(honeypot.takeRemoveEvent("g1", "u1")).toMatchObject({ action: "ban" });
   });
 
   it("bans an account that already left and says so", async () => {
@@ -615,6 +665,54 @@ describe("handleHoneypotMessage", () => {
 
     expect(guild.members.ban).not.toHaveBeenCalled();
     expect(message.delete).not.toHaveBeenCalled();
+  });
+
+  it("leaves a verified member's post alone when the fresh row is disarmed", async () => {
+    // The dashboard's reload ping was lost, so the cached row still says the honeypot is armed here.
+    for (const fresh of DISARMED_ROWS) {
+      const { guild, logging, guildService, run } = setup({ fresh });
+      const message = fakeMessage(guild, { member: fakeMember({ roleIds: ["verified-role"] }) });
+
+      await expect(run(message)).resolves.toBe("not_honeypot");
+
+      expect(guildService.getSettingsFresh).toHaveBeenCalledWith("g1");
+      expect(message.delete).not.toHaveBeenCalled();
+      expect(logging.sendLogEmbed).not.toHaveBeenCalled();
+      expect(logging.sendNotice).not.toHaveBeenCalled();
+    }
+  });
+
+  it("leaves a post alone when the lookup fails and the fresh row is disarmed", async () => {
+    for (const fresh of DISARMED_ROWS) {
+      const { guild, logging, guildService, run } = setup({ fresh });
+      guild.members.fetch.mockRejectedValue(serverError(500));
+      const message = fakeMessage(guild, { member: null });
+
+      await expect(run(message)).resolves.toBe("not_honeypot");
+
+      expect(guildService.getSettingsFresh).toHaveBeenCalledWith("g1");
+      expect(message.delete).not.toHaveBeenCalled();
+      expect(logging.sendLogEmbed).not.toHaveBeenCalled();
+      expect(logging.sendNotice).not.toHaveBeenCalled();
+    }
+  });
+
+  it("rejects and removes nobody when the settings re-read fails", async () => {
+    // An ordinary member, a verified member, and an author whose lookup fails: the re-read comes before all of them.
+    for (const member of [fakeMember(), fakeMember({ roleIds: ["verified-role"] }), null]) {
+      const { guild, logging, guildService, run } = setup({ row: { honeypotAction: "ban" } });
+      guild.members.fetch.mockRejectedValue(serverError(503));
+      guildService.getSettingsFresh.mockRejectedValue(new Error("database unreachable"));
+      const message = fakeMessage(guild, { member });
+
+      // The event loader logs the error.
+      await expect(run(message)).rejects.toThrow("database unreachable");
+
+      expect(message.delete).not.toHaveBeenCalled();
+      expect(guild.members.ban).not.toHaveBeenCalled();
+      expect(logging.sendLogEmbed).not.toHaveBeenCalled();
+      expect(logging.sendNotice).not.toHaveBeenCalled();
+    }
   });
 
   it("handles a burst from one account as one case", async () => {
@@ -700,6 +798,50 @@ describe("handleHoneypotMessage", () => {
     await expect(handled).resolves.toBe("handled");
   });
 
+  it("keeps the shutdown drain waiting for a removal whose settings re-read is pending", async () => {
+    const { row, guild, honeypot, guildService, run } = setup({ row: { honeypotAction: "kick" } });
+    const slowRead = deferred();
+    guildService.getSettingsFresh.mockImplementationOnce(async () => {
+      await slowRead.promise;
+      return row;
+    });
+
+    const handled = run(fakeMessage(guild));
+    await vi.waitFor(() => expect(guildService.getSettingsFresh).toHaveBeenCalledTimes(1));
+    let removalAtDrain: { bans: number; unbans: number } | undefined;
+    const drain = honeypot.drain(5_000).then(() => {
+      removalAtDrain = { bans: guild.members.ban.mock.calls.length, unbans: guild.bans.remove.mock.calls.length };
+    });
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(removalAtDrain).toBeUndefined();
+    slowRead.resolve();
+    await drain;
+    // Shutdown goes on to destroy the client only once the kick's ban and its unban have both gone out.
+    expect(removalAtDrain).toEqual({ bans: 1, unbans: 1 });
+    await expect(handled).resolves.toBe("handled");
+  });
+
+  it("keeps the shutdown drain waiting for a verified member's log entry", async () => {
+    const { guild, honeypot, logging, run } = setup();
+    const slowLog = deferred();
+    logging.sendLogEmbed.mockReturnValueOnce(slowLog.promise);
+
+    const handled = run(fakeMessage(guild, { member: fakeMember({ roleIds: ["verified-role"] }) }));
+    await vi.waitFor(() => expect(logging.sendLogEmbed).toHaveBeenCalledTimes(1));
+    let drained = false;
+    const drain = honeypot.drain(5_000).then(() => {
+      drained = true;
+    });
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(drained).toBe(false);
+    slowLog.resolve();
+    await drain;
+    expect(drained).toBe(true);
+    await expect(handled).resolves.toBe("handled");
+  });
+
   it("logs only when deleted messages are logged, but always sends notices", async () => {
     const { guild, logging, run } = setup({ row: { honeypotAction: "ban" } });
     logging.shouldLog.mockResolvedValue(false);
@@ -730,6 +872,59 @@ describe("handleHoneypotMessage", () => {
     );
   });
 
+  it("logs a case that went wrong at warn level, and any other case at info", async () => {
+    const cases: {
+      prepare: (guild: FakeGuild) => void;
+      action: "kick" | "ban";
+      /** The case's outcome. */
+      kind: string;
+      level: "warn" | "info";
+    }[] = [
+      { prepare: () => {}, action: "kick", kind: "removed", level: "info" },
+      {
+        prepare: (guild) => guild.bans.fetch.mockResolvedValue({ user: { id: "u1" } }),
+        action: "kick",
+        kind: "already_banned",
+        level: "info",
+      },
+      {
+        prepare: (guild) => guild.members.ban.mockRejectedValue(missingPermissions()),
+        action: "ban",
+        kind: "failed",
+        level: "warn",
+      },
+      {
+        prepare: (guild) => {
+          guild.members.ban.mockRejectedValue(serverError(503));
+          guild.bans.fetch.mockRejectedValueOnce(unknownBan()).mockRejectedValueOnce(serverError(503));
+        },
+        action: "kick",
+        kind: "unconfirmed",
+        level: "warn",
+      },
+      {
+        prepare: (guild) => guild.bans.remove.mockRejectedValue(serverError(500)),
+        action: "kick",
+        kind: "still_banned",
+        level: "warn",
+      },
+    ];
+    for (const { prepare, action, kind, level } of cases) {
+      const { guild, logger, run } = setup({ row: { honeypotAction: action } });
+      prepare(guild);
+
+      await expect(run(fakeMessage(guild))).resolves.toBe("handled");
+
+      // Without a log channel, this line is the only trace of a kicked account left banned.
+      expect(logger[level]).toHaveBeenCalledWith(
+        expect.objectContaining({ guildId: "g1", userId: "u1", outcome: expect.objectContaining({ kind }) }),
+        "Honeypot case handled",
+      );
+      const otherLevel = level === "warn" ? "info" : "warn";
+      expect(logger[otherLevel]).not.toHaveBeenCalledWith(expect.anything(), "Honeypot case handled");
+    }
+  });
+
   it("marks the trigger as its own deletion and treats Unknown Message on delete as fine", async () => {
     const { guild, honeypot, logging, logger, run } = setup({ row: { honeypotAction: "ban" } });
     const markOwnDeletion = vi.spyOn(honeypot, "markOwnDeletion");
@@ -744,8 +939,9 @@ describe("handleHoneypotMessage", () => {
     expect(honeypot.consumeOwnDeletion("111")).toBe(true);
     expect(guild.members.ban).toHaveBeenCalledTimes(1);
     expect(logger.warn).not.toHaveBeenCalled();
-    // The message is gone, so there's nothing to report.
+    // The message is gone, so there's nothing to report, and the entry reads as for any delete.
     expect(logging.sendNotice).not.toHaveBeenCalled();
+    expect(logEntries(logging).map((entry) => entry.title)).toEqual(["Message Deleted (Honeypot)"]);
   });
 
   it("reports a message it couldn't delete, whatever the log toggles", async () => {
@@ -756,10 +952,11 @@ describe("handleHoneypotMessage", () => {
         member: fakeMember({ roleIds: ["verified-role"] }),
         deleteError: twoFactorRequired(),
         bans: 0,
-        logged: "Message deleted only (verified member).",
+        logged: "Couldn't delete the message. Nobody was removed (verified member).",
         notice: "Couldn't delete the message: Two factor is required for this operation. Delete it by hand if it's still there.",
       },
-      // An ordinary member's post, where a channel overwrite takes away Manage Messages but the ban still works.
+      // An ordinary member's post, where a channel overwrite takes away Manage Messages but the ban still works. The
+      // text says nothing about the message: the ban's cleanup usually takes it.
       {
         member: fakeMember(),
         deleteError: missingPermissions(),
@@ -778,7 +975,9 @@ describe("handleHoneypotMessage", () => {
 
         expect(message.delete).toHaveBeenCalledTimes(1);
         expect(guild.members.ban).toHaveBeenCalledTimes(bans);
-        // The log entry keeps its fixed text, so the notice is what tells a moderator the message may still be up.
+        // The log entry never claims the delete, and the notice tells a moderator the message may still be up.
+        const titles = logEntries(logging).map((entry) => entry.title);
+        expect(titles).toEqual(logsDeletes ? ["Honeypot Message (Delete Failed)"] : []);
         expect(loggedActions(logging)).toEqual(logsDeletes ? [logged] : []);
         expect(notices(logging)).toEqual([`<@u1> (u1) posted in the honeypot <#trap>. ${notice}`]);
       }
@@ -790,39 +989,57 @@ describe("handleHoneypotMessage", () => {
       prepare: (guild: FakeGuild) => void;
       member?: FakeMember | null;
       action: "kick" | "ban";
-      /** The Honeypot Action field, which keeps the brief's fixed text. */
+      /** The Honeypot Action field. */
       logged: string;
-      /** Notices the case sends before the delete failure notice. */
-      caseNotices: number;
+      /** The notices the case sends before the delete failure notice. */
+      caseNotices: string[];
     }[] = [
       // Membership unknown, so nobody is removed.
       {
         prepare: (guild) => guild.members.fetch.mockRejectedValue(serverError(503)),
         member: null,
         action: "ban",
-        logged: "Message deleted only. Couldn't check membership, so nobody was removed.",
-        caseNotices: 1,
+        logged: "Couldn't delete the message. Couldn't check membership, so nobody was removed.",
+        caseNotices: ["Couldn't delete the message. Couldn't check membership (Service Unavailable), so nobody was removed."],
       },
       // The ban is refused.
       {
         prepare: (guild) => guild.members.ban.mockRejectedValue(missingPermissions()),
         action: "ban",
-        logged: "Removal failed: Missing Permissions. Message deleted only.",
-        caseNotices: 1,
+        logged: "Removal failed: Missing Permissions. Couldn't delete the message.",
+        caseNotices: ["Removal failed: Missing Permissions. Couldn't delete the message."],
       },
       // Already banned, so neither a ban nor its cleanup follows.
       {
         prepare: (guild) => guild.bans.fetch.mockResolvedValue({ user: { id: "u1" } }),
         action: "kick",
-        logged: "Already banned. Message deleted only.",
-        caseNotices: 0,
+        logged: "Already banned. Couldn't delete the message.",
+        caseNotices: [],
       },
-      // Kicked: the ban's cleanup usually takes the message, but it can miss the newest one.
+      // The texts that say nothing about the message stay as they are. Kicked: the ban's cleanup usually takes the
+      // message, but it can miss the newest one.
       {
         prepare: () => {},
         action: "kick",
         logged: "Kicked. Their messages from the last hour were cleaned up.",
-        caseNotices: 0,
+        caseNotices: [],
+      },
+      // Nobody can tell whether the ban happened.
+      {
+        prepare: (guild) => {
+          guild.members.ban.mockRejectedValue(serverError(503));
+          guild.bans.fetch.mockRejectedValueOnce(unknownBan()).mockRejectedValueOnce(serverError(503));
+        },
+        action: "kick",
+        logged: "Removal unconfirmed: Service Unavailable. Check the ban list.",
+        caseNotices: ["Removal unconfirmed: Service Unavailable. Check the ban list."],
+      },
+      // Kicked, but left banned.
+      {
+        prepare: (guild) => guild.bans.remove.mockRejectedValue(serverError(500)),
+        action: "kick",
+        logged: "Kicked, but the unban failed: Internal Server Error. They are still banned and need a manual unban.",
+        caseNotices: ["Kicked, but the unban failed: Internal Server Error. They are still banned and need a manual unban."],
       },
     ];
     for (const { prepare, member, action, logged, caseNotices } of cases) {
@@ -832,12 +1049,12 @@ describe("handleHoneypotMessage", () => {
 
       await expect(run(message)).resolves.toBe("handled");
 
+      expect(logEntries(logging).map((entry) => entry.title)).toEqual(["Honeypot Message (Delete Failed)"]);
       expect(loggedActions(logging)).toEqual([logged]);
-      const sent = notices(logging);
-      expect(sent).toHaveLength(caseNotices + 1);
-      expect(sent.at(-1)).toBe(
-        "<@u1> (u1) posted in the honeypot <#trap>. Couldn't delete the message: Missing Permissions. " +
-          "Delete it by hand if it's still there.",
+      // The delete failure notice comes last, and it is the only one that carries the delete's reason.
+      const deleteNotice = "Couldn't delete the message: Missing Permissions. Delete it by hand if it's still there.";
+      expect(notices(logging)).toEqual(
+        [...caseNotices, deleteNotice].map((text) => `<@u1> (u1) posted in the honeypot <#trap>. ${text}`),
       );
     }
   });
@@ -876,6 +1093,37 @@ describe("handleHoneypotMessage", () => {
     await expect(handled).resolves.toBe("handled");
   });
 
+  it("sends no notice when a same-case message's delete fails", async () => {
+    // First the trigger is deleted and only its follower's delete fails; then both deletes fail.
+    for (const triggerDeleteError of [undefined, missingPermissions()]) {
+      const { guild, ctx, row, logging, logger } = setup({ row: { honeypotAction: "kick" } });
+      // The ban waits behind rate limits for two seconds, so the follower arrives while the case runs.
+      guild.members.ban.mockImplementation(() => new Promise((resolve) => setTimeout(() => resolve("u1"), 2_000)));
+      const trigger = fakeMessage(guild, { id: "111", deleteError: triggerDeleteError });
+      const follower = fakeMessage(guild, { id: "112", deleteError: missingPermissions() });
+
+      const burst = Promise.all([
+        handleHoneypotMessage(asMessage(trigger), row, ctx),
+        handleHoneypotMessage(asMessage(follower), row, ctx),
+      ]);
+      await vi.advanceTimersByTimeAsync(2_000);
+      await expect(burst).resolves.toEqual(["handled", "handled"]);
+
+      expect(follower.delete).toHaveBeenCalledTimes(1);
+      expect(guild.members.ban).toHaveBeenCalledTimes(1);
+      expect(logging.sendLogEmbed).toHaveBeenCalledTimes(1);
+      // Only pino hears about the follower. A notice per message would flood the log channel during a burst.
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ messageId: "112" }),
+        "Couldn't delete a honeypot message",
+      );
+      const triggerNotice =
+        "<@u1> (u1) posted in the honeypot <#trap>. Couldn't delete the message: Missing Permissions. " +
+        "Delete it by hand if it's still there.";
+      expect(notices(logging)).toEqual(triggerDeleteError ? [triggerNotice] : []);
+    }
+  });
+
   it("schedules the sweep 15 seconds after a removal", async () => {
     const { guild, run } = setup({ row: { honeypotAction: "ban" } });
     const leftover = cachedMessage("left-1", "u1", T0 - 60_000);
@@ -887,6 +1135,23 @@ describe("handleHoneypotMessage", () => {
     expect(leftover.delete).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
     expect(leftover.delete).toHaveBeenCalledTimes(1);
+  });
+
+  it("schedules the sweep straight after the ban, before a slow unban finishes", async () => {
+    const { guild, run } = setup({ row: { honeypotAction: "kick" } });
+    const leftover = cachedMessage("left-1", "u1", T0 - 60_000);
+    guild.channels.cache.set("general", fakeTextChannel("general", [leftover]));
+    // The unban waits behind rate limits for a minute.
+    guild.bans.remove.mockImplementation(() => new Promise((resolve) => setTimeout(() => resolve(null), 60_000)));
+
+    const handled = run(fakeMessage(guild));
+    await vi.advanceTimersByTimeAsync(SWEEP_DELAY_MS);
+
+    // The sweep counts from the ban, so a slow unban can't push it past the action record.
+    expect(guild.bans.remove).toHaveBeenCalledTimes(1);
+    expect(leftover.delete).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(60_000);
+    await expect(handled).resolves.toBe("handled");
   });
 });
 

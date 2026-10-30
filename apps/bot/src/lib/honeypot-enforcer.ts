@@ -15,6 +15,7 @@ import {
   decideHoneypot,
   isRealPost,
   removalReason,
+  type HoneypotDecision,
   type MemberStatus,
 } from "../services/honeypot.service.js";
 import type { BotContext } from "../types/context.js";
@@ -34,8 +35,8 @@ const BULK_DELETE_LIMIT = 100;
 /** A failure reason is cut to this length before it goes into a log entry or a notice. */
 const MAX_REASON_LENGTH = 200;
 
-const VERIFIED_TEXT = "Message deleted only (verified member).";
-const LOOKUP_FAILED_TEXT = "Message deleted only. Couldn't check membership, so nobody was removed.";
+/** Why a honeypot message is deleted without removing anyone. */
+type DeleteOnlyWhy = Extract<HoneypotDecision, { type: "delete_only" }>["why"];
 
 /** The author of a honeypot message, as far as Discord could tell. */
 type Author = { kind: "member"; member: GuildMember } | { kind: "left" } | { kind: "lookup_failed"; err: unknown };
@@ -51,6 +52,11 @@ type Outcome =
   | { kind: "failed"; reason: string }
   | { kind: "unconfirmed"; reason: string }
   | { kind: "still_banned"; reason: string };
+
+/** A moderator has to act on these outcomes, so they go out as notices, and pino logs them at warn. */
+function needsAttention(outcome: Outcome): boolean {
+  return outcome.kind === "failed" || outcome.kind === "unconfirmed" || outcome.kind === "still_banned";
+}
 
 function hasErrorCode(err: unknown, code: number): boolean {
   return err instanceof DiscordAPIError && err.code === code;
@@ -111,6 +117,17 @@ export async function handleHoneypotMessage(
   ctx: BotContext,
 ): Promise<"not_honeypot" | "handled"> {
   if (!isArmedIn(settings, message.channelId)) return "not_honeypot";
+  // Shutdown waits for all of this, not only the removal. Otherwise the drain could resolve during the settings
+  // re-read, and destroy() could then land between a kick's ban and its unban, or cut off a delete-only log entry.
+  return ctx.services.honeypot.track(handleArmedMessage(message, settings, ctx));
+}
+
+/** The rest of handleHoneypotMessage, once the cached row says the honeypot is armed in the message's channel. */
+async function handleArmedMessage(
+  message: Message<true>,
+  settings: GuildRow,
+  ctx: BotContext,
+): Promise<"not_honeypot" | "handled"> {
   // System notices (a join notice's author is the new member), webhook posts and bot posts are left alone.
   if (!isRealPost({ system: message.system, webhookId: message.webhookId, authorIsBot: message.author.bot })) {
     return "handled";
@@ -119,26 +136,20 @@ export async function handleHoneypotMessage(
   const author = await lookUpAuthor(message);
   const decision = decideHoneypot(memberStatus(author, settings.verificationRoleId));
   if (decision.type === "ignore") return "handled";
-  if (decision.type === "delete_only") {
-    if (author.kind === "lookup_failed") {
-      // The author might be staff, so nobody is removed.
-      const { err } = author;
-      ctx.logger.warn({ err, guildId: message.guildId, userId: message.author.id }, "Couldn't look up a honeypot poster");
-      const notice = `Message deleted only. Couldn't check membership (${cutReason(describeError(err))}), so nobody was removed.`;
-      await deleteOnly(message, LOOKUP_FAILED_TEXT, ctx, notice);
-    } else {
-      await deleteOnly(message, VERIFIED_TEXT, ctx);
-    }
-    return "handled";
-  }
 
-  // Re-read before removing anyone: the dashboard's reload ping can be lost, leaving the cache stale.
+  // Re-read before deleting or removing anything: the dashboard's reload ping can be lost, leaving the cache stale.
   const fresh = await ctx.services.guild.getSettingsFresh(message.guildId);
   if (!fresh || !isArmedIn(fresh, message.channelId) || !HONEYPOT_ACTIONS.includes(fresh.honeypotAction)) {
     return "not_honeypot";
   }
+  if (decision.type === "delete_only") {
+    // The decision picks the texts. A failed lookup's error only adds its reason to the notice.
+    await deleteOnly(message, decision.why, ctx, author.kind === "lookup_failed" ? author.err : undefined);
+    return "handled";
+  }
+  // The cached row can predate a change to the verification role.
   if (author.kind === "member" && isVerified(author.member, fresh.verificationRoleId)) {
-    await deleteOnly(message, VERIFIED_TEXT, ctx);
+    await deleteOnly(message, "verified", ctx);
     return "handled";
   }
 
@@ -200,13 +211,28 @@ export async function sweepCachedMessages(guild: Guild, userId: string, sinceMs:
 }
 
 /**
- * Deletes and logs the message without removing anyone, with a notice when given one. When the delete fails, a
- * further notice asks a moderator to delete it by hand.
+ * Deletes and logs the message without removing anyone. A failed member lookup also gets a notice. When the delete
+ * fails, the texts say so, and a last notice asks a moderator to delete the message by hand.
  */
-async function deleteOnly(message: Message<true>, actionText: string, ctx: BotContext, notice?: string): Promise<void> {
+async function deleteOnly(
+  message: Message<true>,
+  why: DeleteOnlyWhy,
+  ctx: BotContext,
+  lookupError?: unknown,
+): Promise<void> {
+  if (why === "lookup_failed") {
+    // The author might be staff, so nobody is removed.
+    const fields = { err: lookupError, guildId: message.guildId, userId: message.author.id };
+    ctx.logger.warn(fields, "Couldn't look up a honeypot poster");
+  }
   const deleteFailure = await deleteHoneypotMessage(message, ctx);
-  await sendLogEntry(message, actionText, ctx);
-  if (notice) await sendHoneypotNotice(message, notice, ctx);
+  const deleted = deleteFailure === null;
+  await sendLogEntry(message, deleteOnlyText(why, deleted), deleted, ctx);
+  if (why === "lookup_failed") {
+    const reason = cutReason(describeError(lookupError));
+    const notice = `${messageFate(deleted)} Couldn't check membership (${reason}), so nobody was removed.`;
+    await sendHoneypotNotice(message, notice, ctx);
+  }
   if (deleteFailure !== null) await sendHoneypotNotice(message, deleteFailedText(deleteFailure), ctx);
 }
 
@@ -231,13 +257,15 @@ async function runRemovalCase(
     // posts in the honeypot meanwhile is a new case.
     ctx.services.honeypot.endCase(message.guildId, message.author.id, caseId);
   }
-  ctx.logger.info({ guildId: message.guildId, userId: message.author.id, action, outcome }, "Honeypot case handled");
+  // At warn when a moderator has to act: with no log channel, it's the only trace of a kicked account left banned.
+  const fields = { guildId: message.guildId, userId: message.author.id, action, outcome };
+  if (needsAttention(outcome)) ctx.logger.warn(fields, "Honeypot case handled");
+  else ctx.logger.info(fields, "Honeypot case handled");
 
-  const text = outcomeText(outcome);
-  await sendLogEntry(message, text, ctx);
-  if (outcome.kind === "failed" || outcome.kind === "unconfirmed" || outcome.kind === "still_banned") {
-    await sendHoneypotNotice(message, text, ctx);
-  }
+  const deleted = deleteFailure === null;
+  const text = outcomeText(outcome, deleted);
+  await sendLogEntry(message, text, deleted, ctx);
+  if (needsAttention(outcome)) await sendHoneypotNotice(message, text, ctx);
   // Sent even after a ban, whose cleanup usually takes the message: Discord's cleanup can miss the newest message, and
   // the leftover sweep fails the same way when DragonBot can't delete there.
   if (deleteFailure !== null) await sendHoneypotNotice(message, deleteFailedText(deleteFailure), ctx);
@@ -279,9 +307,10 @@ async function removeAuthor(
 
   const ban = await banAuthor(guild, userId, reason, caseId, ctx);
   if (ban.kind === "failed") return { kind: "failed", reason: ban.reason };
-  const unbanFailure = action === "kick" ? await liftKickBan(guild, userId) : null;
-  // Not after an uncertain ban: the account may still be a member.
+  // Straight after the ban, so a slow unban can't push the sweep past the action record, where its deletes would reach
+  // the ordinary delete log. Not after an uncertain ban: the account may still be a member.
   if (ban.kind === "confirmed") scheduleSweep(guild, userId, ctx.logger);
+  const unbanFailure = action === "kick" ? await liftKickBan(guild, userId) : null;
 
   if (unbanFailure !== null) return { kind: "still_banned", reason: unbanFailure };
   if (ban.kind === "uncertain") return { kind: "unconfirmed", reason: ban.reason };
@@ -369,8 +398,11 @@ async function deleteHoneypotMessage(message: Message<true>, ctx: BotContext): P
   return null;
 }
 
-/** The Honeypot Action field of the log entry, which notices repeat. */
-function outcomeText(outcome: Outcome): string {
+/**
+ * The Honeypot Action field of a removal case's log entry, which notices repeat. It never claims a delete that failed.
+ * The removed, unconfirmed and still-banned texts say nothing about the message: a ban's cleanup usually takes it.
+ */
+function outcomeText(outcome: Outcome, deleted: boolean): string {
   switch (outcome.kind) {
     case "removed": {
       const done = outcome.action === "ban" ? "Banned." : "Kicked.";
@@ -379,9 +411,9 @@ function outcomeText(outcome: Outcome): string {
         : `${done} Their messages from the last hour were cleaned up.`;
     }
     case "already_banned":
-      return "Already banned. Message deleted only.";
+      return `Already banned. ${messageFate(deleted)}`;
     case "failed":
-      return `Removal failed: ${cutReason(outcome.reason)}. Message deleted only.`;
+      return `Removal failed: ${cutReason(outcome.reason)}. ${messageFate(deleted)}`;
     case "unconfirmed":
       return `Removal unconfirmed: ${cutReason(outcome.reason)}. Check the ban list.`;
     case "still_banned":
@@ -389,17 +421,38 @@ function outcomeText(outcome: Outcome): string {
   }
 }
 
+/** The Honeypot Action field for a message deleted without removing anyone. It never claims a delete that failed. */
+function deleteOnlyText(why: DeleteOnlyWhy, deleted: boolean): string {
+  if (why === "lookup_failed") return `${messageFate(deleted)} Couldn't check membership, so nobody was removed.`;
+  return deleted
+    ? "Message deleted only (verified member)."
+    : "Couldn't delete the message. Nobody was removed (verified member).";
+}
+
+/** What became of the honeypot message, in the texts that mention it. */
+function messageFate(deleted: boolean): string {
+  return deleted ? "Message deleted only." : "Couldn't delete the message.";
+}
+
 /** The notice for a honeypot message DragonBot couldn't delete. */
 function deleteFailedText(reason: string): string {
   return `Couldn't delete the message: ${cutReason(reason)}. Delete it by hand if it's still there.`;
 }
 
-/** The deleted-message log entry, sent only when the server logs deleted messages. Never throws. */
-async function sendLogEntry(message: Message<true>, actionText: string, ctx: BotContext): Promise<void> {
+/**
+ * The deleted-message log entry, sent only when the server logs deleted messages. When the delete failed, its title
+ * says so. Never throws.
+ */
+async function sendLogEntry(
+  message: Message<true>,
+  actionText: string,
+  deleted: boolean,
+  ctx: BotContext,
+): Promise<void> {
   try {
     if (!(await ctx.services.logging.shouldLog(message.guildId, "message_delete"))) return;
     const embed = buildMessageDeletedEmbed(message, {
-      title: "Message Deleted (Honeypot)",
+      title: deleted ? "Message Deleted (Honeypot)" : "Honeypot Message (Delete Failed)",
       extraFields: [{ name: "Honeypot Action", value: actionText }],
     });
     await ctx.services.logging.sendLogEmbed(message.guildId, embed, message.client, ctx.logger);
