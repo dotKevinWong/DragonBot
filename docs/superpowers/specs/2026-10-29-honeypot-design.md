@@ -123,6 +123,8 @@ Each sync is a reconcile: it compares the warning that should exist with the one
   | 50001 Missing Access, 50013 Missing Permissions | **Can't tell** | Keep the stored IDs, don't post a duplicate, and report a notice. |
   | 30003 (pin limit, 250 per channel) | Can't pin | Report a notice. |
 
+  The "can't tell" rule covers the **current** warning. When DragonBot is removing an **old** warning (because the honeypot was turned off or moved to another channel) and can't tell whether it's still there, it does two things. It reports a notice asking for the old warning to be deleted by hand, and it forgets the old IDs. There's only one stored ID pair, so keeping the old IDs would stop the new warning from ever being recorded. *(plan check)*
+
 - **Silence the bot's own deletions.** Before DragonBot deletes its own old warning, add the warning's ID to the skip set. Otherwise, after a restart, the uncached message would be logged as "Unknown / Content not cached". *(review)*
 - **Report failures in the log channel.** When DragonBot can't post, pin or delete a warning, it reports this in the log channel (see Logging) as well as through pino.
 - **Never crash the bot.** Every server's sync is wrapped in its own try/catch, and the startup and timer calls are wrapped too. Today an unhandled rejection exits the process, and Railway gives up after 10 restarts. *(review)*
