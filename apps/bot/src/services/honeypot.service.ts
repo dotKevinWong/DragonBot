@@ -15,6 +15,12 @@ export const UNBAN_REASON = "[Honeypot kick] unban after message cleanup";
 /** How long an action record lives, counted from when the ban call resolves. */
 export const RECORD_TTL_MS = 600_000;
 
+/**
+ * How long an action record lives after an uncertain confirmation, when nobody can tell whether the ban happened.
+ * A ban that does land sends its ban event while discord.js is still retrying the call, so a minute covers it.
+ */
+export const UNCERTAIN_RECORD_TTL_MS = 60_000;
+
 /** How long after the ban resolves the account's new messages are deleted on arrival. */
 export const LATE_MESSAGE_WINDOW_MS = 120_000;
 
@@ -93,7 +99,10 @@ interface RecordEntry {
   /** The case that made the record. Only that case can confirm or drop it. */
   caseId: number;
   record: ActionRecord;
-  /** Until the ban call resolves, the moment the case's in-flight timeout passes; then RECORD_TTL_MS after the ban resolves. */
+  /**
+   * Until the ban call resolves, the moment the case's in-flight timeout passes; then RECORD_TTL_MS after the ban
+   * resolves, or UNCERTAIN_RECORD_TTL_MS after an uncertain confirmation.
+   */
   expiresAt: number;
   banEventTaken: boolean;
   /** Starts true when the account had already left, because banning a non-member sends no remove event. */
@@ -189,14 +198,23 @@ export class HoneypotService {
     return true;
   }
 
-  /** This case's ban resolved: its record now lives for RECORD_TTL_MS, and the late-message window opens. */
-  confirmAction(guildId: string, userId: string, caseId: number): void {
+  /**
+   * This case's ban resolved: its record now lives for RECORD_TTL_MS, and the late-message window opens.
+   * Pass uncertain when nobody can tell whether the ban happened. The record then lives only UNCERTAIN_RECORD_TTL_MS,
+   * long enough to keep a late ban event out of ban sync, and no late-message window opens.
+   */
+  confirmAction(guildId: string, userId: string, caseId: number, options: { uncertain?: boolean } = {}): void {
     const key = accountKey(guildId, userId);
     const now = Date.now();
     this.sweep(now);
     const entry = this.actionRecords.get(key);
     // No record from this case: nothing to confirm, and no late window opens.
     if (!entry || entry.caseId !== caseId) return;
+    if (options.uncertain) {
+      // The account may still be a member, so its new messages aren't deleted on arrival.
+      entry.expiresAt = now + UNCERTAIN_RECORD_TTL_MS;
+      return;
+    }
     entry.expiresAt = now + RECORD_TTL_MS;
     this.lateWindows.set(key, { caseId, endsAt: now + LATE_MESSAGE_WINDOW_MS });
   }
@@ -234,8 +252,8 @@ export class HoneypotService {
   }
 
   /**
-   * True from recordAction until RECORD_TTL_MS after confirmAction, or until the case times out if confirmAction never
-   * comes. Taking the record's events doesn't end it.
+   * True from recordAction until RECORD_TTL_MS after confirmAction (UNCERTAIN_RECORD_TTL_MS after an uncertain one), or
+   * until the case times out if confirmAction never comes. Taking the record's events doesn't end it.
    */
   wasRecentlyActioned(guildId: string, userId: string): boolean {
     return this.liveRecord(guildId, userId) !== undefined;

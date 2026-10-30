@@ -8,6 +8,7 @@ import {
   RECORD_TTL_MS,
   SWEEP_DELAY_MS,
   UNBAN_REASON,
+  UNCERTAIN_RECORD_TTL_MS,
   WARNING_COLOR,
   WARNING_TITLE,
   decideHoneypot,
@@ -61,6 +62,7 @@ describe("honeypot rules", () => {
   it("uses the agreed cleanup window and timings", () => {
     expect(CLEANUP_SECONDS).toBe(3600);
     expect(RECORD_TTL_MS).toBe(600_000);
+    expect(UNCERTAIN_RECORD_TTL_MS).toBe(60_000);
     expect(LATE_MESSAGE_WINDOW_MS).toBe(120_000);
     expect(IN_FLIGHT_TIMEOUT_MS).toBe(900_000);
     expect(SWEEP_DELAY_MS).toBe(15_000);
@@ -120,12 +122,14 @@ describe("HoneypotService", () => {
     vi.advanceTimersByTime(60_000);
     svc.dropAction("g", "u", first);                                     // the first case's late calls
     svc.confirmAction("g", "u", first);
+    svc.confirmAction("g", "u", first, { uncertain: true });
     svc.endCase("g", "u", first);
     expect(svc.isWithinLateWindow("g", "u")).toBe(true);
     expect(svc.beginCase("g", "u", Date.now()).kind).toBe("same_case"); // the second case is still in flight
     expect(svc.takeBanEvent("g", "u")).toEqual(rec2);
     vi.advanceTimersByTime(LATE_MESSAGE_WINDOW_MS - 60_000 + 1);
     expect(svc.isWithinLateWindow("g", "u")).toBe(false);                // still timed from the second case's confirm
+    expect(svc.wasRecentlyActioned("g", "u")).toBe(true);                // and its record still lives RECORD_TTL_MS from it
   });
 
   it("returns false from recordAction once the case has timed out", () => {
@@ -133,6 +137,13 @@ describe("HoneypotService", () => {
     vi.advanceTimersByTime(IN_FLIGHT_TIMEOUT_MS + 1);                    // the message delete or the ban check hung
     expect(svc.recordAction("g", "u", id, rec)).toBe(false);
     expect(svc.wasRecentlyActioned("g", "u")).toBe(false);
+  });
+
+  it("leaves no finish time behind when a case that timed out calls endCase", () => {
+    const id = startCase();
+    vi.advanceTimersByTime(IN_FLIGHT_TIMEOUT_MS + 1);                    // no method has swept since
+    svc.endCase("g", "u", id);
+    expect(svc.beginCase("g", "u", Date.now() - 1).kind).toBe("start");
   });
 
   it("keeps a record alive until the ban resolves, then for RECORD_TTL_MS", () => {
@@ -151,6 +162,15 @@ describe("HoneypotService", () => {
     vi.advanceTimersByTime(2);                                           // IN_FLIGHT_TIMEOUT_MS + 1 after beginCase; no confirm or drop came
     expect(svc.wasRecentlyActioned("g", "u")).toBe(false);
     expect(svc.takeBanEvent("g", "u")).toBeNull();
+  });
+
+  it("doesn't bring an expired pending record back when confirmAction arrives after its case timed out", () => {
+    const id = startCase();
+    svc.recordAction("g", "u", id, rec);
+    vi.advanceTimersByTime(IN_FLIGHT_TIMEOUT_MS + 1);                    // no method has swept since
+    svc.confirmAction("g", "u", id);
+    expect(svc.isWithinLateWindow("g", "u")).toBe(false);
+    expect(svc.wasRecentlyActioned("g", "u")).toBe(false);
   });
 
   it("expires a confirmed record after RECORD_TTL_MS", () => {
@@ -200,6 +220,20 @@ describe("HoneypotService", () => {
     expect(svc.isWithinLateWindow("g", "u")).toBe(false);
   });
 
+  it("keeps an uncertain confirmation for a minute and opens no late window", () => {
+    const id = startCase();
+    svc.recordAction("g", "u", id, rec);
+    vi.advanceTimersByTime(90_000);                                      // the ban and the ban-list check both failed, after retries
+    svc.confirmAction("g", "u", id, { uncertain: true });                // nobody can tell whether the ban happened
+    expect(svc.isWithinLateWindow("g", "u")).toBe(false);                // the account may still be a member
+    vi.advanceTimersByTime(UNCERTAIN_RECORD_TTL_MS);
+    expect(svc.wasRecentlyActioned("g", "u")).toBe(true);                // counted from the confirmation, not from beginCase
+    expect(svc.takeBanEvent("g", "u")).toEqual(rec);                     // a ban that landed late still stays out of ban sync
+    expect(svc.takeRemoveEvent("g", "u")).toEqual(rec);
+    vi.advanceTimersByTime(1);
+    expect(svc.wasRecentlyActioned("g", "u")).toBe(false);               // gone, so a moderator's ban or kick from now on is handled normally
+  });
+
   it("keeps the recent-action and late windows after both events are taken", () => {
     const id = startCase();
     svc.recordAction("g", "u", id, rec); svc.confirmAction("g", "u", id);
@@ -243,6 +277,14 @@ describe("HoneypotService", () => {
     expect(svc.takeRemoveEvent("g", "u")).toEqual(rec2);
   });
 
+  it("closes the late window it opened when the same case's ban is dropped", () => {
+    const id = startCase();
+    svc.recordAction("g", "u", id, rec); svc.confirmAction("g", "u", id);
+    svc.dropAction("g", "u", id);
+    expect(svc.isWithinLateWindow("g", "u")).toBe(false);
+    expect(svc.wasRecentlyActioned("g", "u")).toBe(false);
+  });
+
   it("keeps the late window running while a new case is pending, even when the new ban fails", () => {
     const first = startCase();
     svc.recordAction("g", "u", first, rec); svc.confirmAction("g", "u", first); svc.endCase("g", "u", first);
@@ -255,6 +297,18 @@ describe("HoneypotService", () => {
     expect(svc.wasRecentlyActioned("g", "u")).toBe(false);
     vi.advanceTimersByTime(LATE_MESSAGE_WINDOW_MS - 30_000 + 1);
     expect(svc.isWithinLateWindow("g", "u")).toBe(false);
+  });
+
+  it("leaves an earlier case's late window alone when a new case's confirmation is uncertain", () => {
+    const first = startCase();
+    svc.recordAction("g", "u", first, rec); svc.confirmAction("g", "u", first); svc.endCase("g", "u", first);
+    vi.advanceTimersByTime(30_000);
+    const second = startCase();                                                                       // rejoined and posted again
+    svc.recordAction("g", "u", second, { ...rec, reason: "[Honeypot kick] posted in #trap (msg 222)" });
+    svc.confirmAction("g", "u", second, { uncertain: true });
+    expect(svc.isWithinLateWindow("g", "u")).toBe(true);                                              // the first case opened it
+    vi.advanceTimersByTime(LATE_MESSAGE_WINDOW_MS - 30_000 + 1);
+    expect(svc.isWithinLateWindow("g", "u")).toBe(false);                                             // the uncertain one opened none
   });
 
   it("consumes own deletions once", () => {
