@@ -73,7 +73,7 @@ const MANAGE_GUILD = BigInt(1) << BigInt(5);
  *
  * The member's server-wide permissions are the @everyone role's (its ID is the guild ID) ORed with those of each of
  * their roles; role IDs the guild doesn't list are skipped. A timed-out member keeps only Administrator. Any failed
- * fetch or error refuses access. Two Discord calls: the guild, then the member.
+ * fetch or error refuses access. At most two Discord calls: the guild, then the member (not needed for the owner).
  */
 async function checkDiscordManageGuild(
   guildId: string,

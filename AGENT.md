@@ -192,13 +192,13 @@ When a setting is null or a feature toggle is false, the feature is simply inact
 
 ### Guild Admin Permissions
 
-The `guild_admins` table provides granular permissions for users who don't have Discord's MANAGE_GUILD permission. Available scopes:
+The `guild_admins` table provides granular permissions for users who aren't the server owner and don't have Discord's Administrator or Manage Server permission. Available scopes:
 
 `verification`, `welcome`, `logging`, `intro_gate`, `moderation`, `suggestions`, `ai`, `offtopic`, `xp`, `schedules`, `birthday`, `youtube`, `managers`, `*` (wildcard)
 
 The server owner and members with Administrator or Manage Server always get full access. The `guild_admins` table is additive.
 
-The honeypot fields (`is_honeypot_enabled`, `honeypot_channel_id`, `honeypot_action`) need full access: MANAGE_GUILD or a `guild_admins` row holding `*`. They decide who gets kicked or banned, so the `moderation` scope isn't enough.
+The honeypot fields (`is_honeypot_enabled`, `honeypot_channel_id`, `honeypot_action`) need full access: the server owner, Administrator, Manage Server or a `guild_admins` row holding `*`. They decide who gets kicked or banned, so the `moderation` scope isn't enough.
 
 ## Environment Variables
 
@@ -238,7 +238,7 @@ All routes validate input with zod. All return `{ error, code }` on failure.
 
 - `POST /api/auth` — token → JWT exchange
 - `GET /api/auth` — verify JWT, return user info + Discord avatar
-- `GET /api/guilds` — list guilds user can manage (checks MANAGE_GUILD + guild_admins)
+- `GET /api/guilds` — list guilds user can manage (checks owner, Administrator or Manage Server, then guild_admins)
 - `GET /api/profile` — current user's profile
 - `PATCH /api/profile` — update profile
 - `GET /api/server/[guildId]` — guild settings
@@ -371,7 +371,7 @@ Config files: `railway.json`, `vercel.json`
 ### Authentication & Authorization
 
 - **JWT validation on every authenticated request.** Every API route that reads or writes user/guild data must verify the JWT signature and expiration.
-- **Authorization is not authentication.** After verifying identity via JWT, always check the user has permission for the specific guild/resource (MANAGE_GUILD permission, guild_admins table entry, or resource ownership).
+- **Authorization is not authentication.** After verifying identity via JWT, always check the user has permission for the specific guild/resource (owner, Administrator or Manage Server, guild_admins table entry, or resource ownership).
 - **Auth tokens are single-use.** Delete the `auth_tokens` row immediately after JWT exchange. Never allow reuse.
 - **Sensitive data is ephemeral.** Verification codes, login links, and tokens must only appear in ephemeral Discord replies — never in public channels.
 
