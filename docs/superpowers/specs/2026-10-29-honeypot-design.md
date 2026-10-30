@@ -1,7 +1,7 @@
 # Honeypot Channel: Design
 
 - **Date:** 2026-10-29
-- **Status:** Approved by Kevin on 2026-10-29. Amended after the build so the text matches the code. Each amendment is marked *(Ruling N)*, and "Changes after implementation" at the end lists them.
+- **Status:** Approved by Kevin on 2026-10-29. Amended after the build so the text matches the code. "Changes after implementation" at the end lists the amendments, and most are also marked *(Ruling N)* where they change the text.
 - **Branch:** `claude/dragonbot-honey-pot-c00669`
 - **Mockups reviewed:** dashboard card, pinned warning (style B chosen), log entries
 - **Reviewed by:** a builder check (nothing important left), a Discord API fact check, and a risk review. Their fixes are folded in below and marked *(review)*.
@@ -357,8 +357,8 @@ Kevin runs the push himself, because it's the production database.
 12. Note whether the cleanup produced individual "Message Deleted" logs. With the skip rule, it shouldn't.
 13. Purge the honeypot channel, with the pinned warning in it, using a tool that bulk-deletes. Only the bulk-delete event arrives, and the warning comes straight back. *(Ruling 19)*
 14. Open the server page in two dashboard tabs. Turn the honeypot off in one and save. Save an unrelated change in the other. The honeypot stays off. *(Ruling 33)*
-15. Remove DragonBot's Embed Links permission in the honeypot channel and run a sync (`/admin reload`). Note whether Discord refuses the warning or posts it empty. If it posts it empty, the honeypot must not count as armed: report that to Kevin as a bug.
-16. Delete the pinned warning four times within 10 minutes. DragonBot reposts it three times, then stops, clears the honeypot (nobody is removed for posting there) and sends one notice to the log channel. `/admin reload` in that server starts a fresh budget and the warning comes back. *(Ruling 29)*
+15. Remove DragonBot's Embed Links permission in the honeypot channel, then delete the pinned warning so DragonBot tries to post it again (a sync while the warning is still there posts nothing). Note whether Discord refuses the new warning or posts it empty. If Discord refuses it, a "Couldn't post the honeypot warning" notice appears in the log channel and the honeypot stays off. If it posts it empty, the honeypot must not count as armed: treat that as a bug. Grant Embed Links back and run `/admin reload`: the warning comes back.
+16. Run `/admin reload` in the server first, which starts a fresh repost budget. Then delete the pinned warning four times within 10 minutes. DragonBot reposts it three times, then stops, clears the honeypot (nobody is removed for posting there) and sends one notice to the log channel (the same notice at most once a day). `/admin reload` starts a fresh budget again and the warning comes back. *(Ruling 29)*
 
 ## Left to the builder
 
