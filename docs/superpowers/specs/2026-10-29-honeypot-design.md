@@ -60,6 +60,7 @@ Add a new **Honeypot** card to the server settings page, directly after **Modera
 | "Action" select: "Ban: removed for good" / "Kick: removed, can rejoin" | `honeypotAction` | `'kick' \| 'ban'`. Default `'kick'`. *(my call: the gentler default while Kevin experiments. A wrong channel choice then can't permanently remove anyone.)* |
 
 The help text under the controls (from the mockup) says:
+- *(Kevin, 2026-10-30)* Changing these settings needs Manage Server or full dashboard access.
 - Their messages from the last hour are cleaned up across the whole server either way.
 - Verified members only have the message deleted.
 - Staff are ignored. List the exact staff permissions, as defined in "Who triggers what".
