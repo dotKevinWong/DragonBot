@@ -56,6 +56,8 @@ function fakeMessage(
     title?: string;
     pinError?: Error;
     deleteError?: Error;
+    /** Someone else deletes it just before DragonBot pins it, so the pin gets Unknown Message. */
+    goneBeforePin?: boolean;
   } = {},
 ): FakeMessage {
   const message: FakeMessage = {
@@ -65,6 +67,10 @@ function fakeMessage(
     author: { id: options.authorId ?? BOT_ID },
     embeds: [{ color: WARNING_COLOR, title: options.title ?? WARNING_TITLE, description: warningText(options.action ?? "kick") }],
     pin: vi.fn(async () => {
+      if (options.goneBeforePin) {
+        message.deleted = true;
+        throw unknownMessage();
+      }
       if (options.pinError) throw options.pinError;
       message.pinned = true;
       return message;
@@ -94,6 +100,8 @@ function fakeChannel(
     pinsError?: Error;
     sendError?: Error;
     postedPinError?: Error;
+    /** How many of the first posts someone else deletes before DragonBot can pin them, as a cleaner bot would. */
+    postsGoneBeforePin?: number;
     textBased?: boolean;
   } = {},
 ) {
@@ -107,7 +115,11 @@ function fakeChannel(
     isSendable: () => options.textBased ?? true,
     send: vi.fn(async ({ embeds }: { embeds: EmbedBuilder[] }) => {
       if (options.sendError) throw options.sendError;
-      const message = fakeMessage(`${id}-posted-${posted.length + 1}`, { pinned: false, pinError: options.postedPinError });
+      const message = fakeMessage(`${id}-posted-${posted.length + 1}`, {
+        pinned: false,
+        pinError: options.postedPinError,
+        goneBeforePin: posted.length < (options.postsGoneBeforePin ?? 0),
+      });
       message.embeds = embeds.map((embed) => embed.toJSON());
       messages.push(message);
       posted.push(message);
@@ -495,6 +507,149 @@ describe("HoneypotWarningSync.sync", () => {
     expect(channel.send).not.toHaveBeenCalled();
     expect(guildService.setHoneypotWarning).not.toHaveBeenCalled();
     expect(syncFailures(logger)).toEqual([]);
+  });
+
+  it("posts again when the new warning is deleted before it is pinned", async () => {
+    // For example a purge's next batch, or a cleaner bot, takes the warning before its ID is stored, where no
+    // delete handler can recognise it.
+    const channel = fakeChannel("c1", { postsGoneBeforePin: 1 });
+    const { warning, guildService, logging, logger } = setupServer({}, { c1: channel });
+
+    await warning.sync("g1");
+
+    expect(channel.posted).toHaveLength(2);
+    const [gone, kept] = channel.posted;
+    expect(gone.pin).toHaveBeenCalledTimes(1);
+    expect(kept.pin).toHaveBeenCalledWith("Honeypot warning");
+    expect(kept.pinned).toBe(true);
+    expect(guildService.setHoneypotWarning.mock.calls).toEqual([
+      ["g1", { channelId: "c1", messageId: gone.id }],
+      ["g1", null],
+      ["g1", { channelId: "c1", messageId: kept.id }],
+    ]);
+    // The deleted warning's IDs were cleared before the next one was posted.
+    expect(guildService.setHoneypotWarning.mock.invocationCallOrder[1]).toBeLessThan(channel.send.mock.invocationCallOrder[1]);
+    // A deleted warning isn't a pin failure, so there's no "Couldn't pin" notice.
+    expect(logging.sendNotice).not.toHaveBeenCalled();
+    expect(syncFailures(logger)).toEqual([]);
+  });
+
+  it("clears and posts again when saving the ids failed and the pin finds the warning gone", async () => {
+    // The failed save may still have reached the database, so the gone warning's IDs are cleared either way.
+    const channel = fakeChannel("c1", { postsGoneBeforePin: 1 });
+    const { warning, guildService, logging, logger } = setupServer({}, { c1: channel });
+    const saveError = new Error("database is down");
+    guildService.setHoneypotWarning.mockRejectedValueOnce(saveError);
+
+    await warning.sync("g1");
+
+    expect(channel.posted).toHaveLength(2);
+    const [gone, kept] = channel.posted;
+    expect(guildService.setHoneypotWarning.mock.calls).toEqual([
+      ["g1", { channelId: "c1", messageId: gone.id }],
+      ["g1", null],
+      ["g1", { channelId: "c1", messageId: kept.id }],
+    ]);
+    expect(kept.pinned).toBe(true);
+    // The save's error is logged rather than ending the sync.
+    expect(logger.warn).toHaveBeenCalledWith(
+      { err: saveError, guildId: "g1", channelId: "c1", messageId: gone.id },
+      "Couldn't store the honeypot warning's IDs",
+    );
+    expect(syncFailures(logger)).toEqual([]);
+    expect(logging.sendNotice).not.toHaveBeenCalled();
+  });
+
+  it("gives up after three warnings are deleted before they are pinned", async () => {
+    const givenUp =
+      "The honeypot warning in <#c1> was deleted as soon as it was posted, 3 times in a row. " +
+      "The honeypot is off until the warning stays up. Check for a bot or tool deleting messages there.";
+    // Nothing stored yet, and a stored warning found unpinned whose pin finds it gone: the same limit of 3 posts.
+    const starts = [
+      { row: {}, messages: [], cleared: [] },
+      {
+        row: { honeypotWarningChannelId: "c1", honeypotWarningMessageId: "w1" },
+        messages: [fakeMessage("w1", { pinned: false, goneBeforePin: true })],
+        cleared: [["g1", null]],
+      },
+    ];
+    for (const start of starts) {
+      // Every new message is deleted as soon as it appears.
+      const channel = fakeChannel("c1", { messages: start.messages, postsGoneBeforePin: 10 });
+      const { warning, guildService, logging, logger } = setupServer(start.row, { c1: channel });
+
+      await warning.sync("g1");
+
+      expect(channel.posted).toHaveLength(3);
+      expect(guildService.setHoneypotWarning.mock.calls).toEqual([
+        ...start.cleared,
+        ...channel.posted.flatMap((post) => [
+          ["g1", { channelId: "c1", messageId: post.id }],
+          ["g1", null],
+        ]),
+      ]);
+      // The IDs stay cleared, so the honeypot stays off.
+      expect(await guildService.getSettingsFresh("g1")).toMatchObject({
+        honeypotWarningChannelId: null,
+        honeypotWarningMessageId: null,
+      });
+      expect(notices(logging)).toEqual([givenUp]);
+      expect(syncFailures(logger)).toEqual([]);
+    }
+  });
+
+  it("replaces an unpinned stored warning whose pin finds it gone", async () => {
+    // Deleted between the sync's fetch and its pin.
+    const stored = fakeMessage("w1", { pinned: false, goneBeforePin: true });
+    const channel = fakeChannel("c1", { messages: [stored] });
+    const { warning, guildService, logging, logger } = setupServer(
+      { honeypotWarningChannelId: "c1", honeypotWarningMessageId: "w1" },
+      { c1: channel },
+    );
+
+    await warning.sync("g1");
+
+    expect(stored.pin).toHaveBeenCalledTimes(1);
+    expect(channel.posted).toHaveLength(1);
+    const posted = channel.posted[0];
+    expect(posted.pin).toHaveBeenCalledWith("Honeypot warning");
+    expect(guildService.setHoneypotWarning.mock.calls).toEqual([
+      ["g1", null],
+      ["g1", { channelId: "c1", messageId: posted.id }],
+    ]);
+    // It looked for a warning to adopt before posting one.
+    expect(channel.messages.fetchPins).toHaveBeenCalledTimes(1);
+    expect(logging.sendNotice).not.toHaveBeenCalled();
+    expect(syncFailures(logger)).toEqual([]);
+  });
+
+  it("keeps a warning armed when its pin fails for another reason", async () => {
+    // Only Unknown Message means the warning is gone. Even Unknown Channel is reported as before.
+    const failures = [
+      { error: missingPermissions, why: "DragonBot needs the Pin Messages permission there" },
+      { error: unknownChannel, why: "Unknown Channel" },
+    ];
+    for (const { error, why } of failures) {
+      // A new warning, and a stored one found unpinned: both stay stored, with the notice and no second post.
+      const posting = fakeChannel("c1", { postedPinError: error() });
+      const stored = fakeMessage("w1", { pinned: false, pinError: error() });
+      const repinning = fakeChannel("c1", { messages: [stored] });
+      const cases = [
+        { channel: posting, row: {}, written: () => [["g1", { channelId: "c1", messageId: posting.posted[0].id }]] },
+        { channel: repinning, row: { honeypotWarningChannelId: "c1", honeypotWarningMessageId: "w1" }, written: () => [] },
+      ];
+      for (const { channel, row, written } of cases) {
+        const { warning, guildService, logging, logger } = setupServer(row, { c1: channel });
+
+        await warning.sync("g1");
+
+        expect(channel.send).toHaveBeenCalledTimes(row.honeypotWarningMessageId ? 0 : 1);
+        expect(guildService.setHoneypotWarning.mock.calls).toEqual(written());
+        expect(notices(logging)).toEqual([`Couldn't pin the honeypot warning in <#c1>: ${why}.`]);
+        expect(syncFailures(logger)).toEqual([]);
+      }
+      expect(stored.pin).toHaveBeenCalledTimes(1);
+    }
   });
 
   it("leaves a server without a honeypot or a stored warning alone", async () => {

@@ -22,10 +22,16 @@ const PINS_SEARCHED = 50;
 
 const PIN_REASON = "Honeypot warning";
 
+/** The most warnings one sync posts when each is deleted before it can be pinned. */
+const MAX_POSTS_PER_SYNC = 3;
+
 interface StoredWarning {
   channelId: string;
   messageId: string;
 }
+
+/** What pinning a warning found. "gone" is Unknown Message: the warning was deleted. Any other failure has been reported. */
+type PinResult = "pinned" | "gone" | "failed";
 
 /** The pinned warning: the title and the wording for the action, and nothing else. */
 export function buildWarningEmbed(action: HoneypotAction): EmbedBuilder {
@@ -141,8 +147,9 @@ export class HoneypotWarningSync {
       }
       if (current) {
         await this.updateWording(current, desired.action);
-        if (!current.pinned) await this.pinWarning(guildId, channel.id, current);
-        return;
+        // Pinned, or a pin failure that has been reported: either way it's there, and it still arms the honeypot.
+        if (current.pinned || (await this.pinWarning(guildId, channel.id, current)) !== "gone") return;
+        // Its pin found it deleted since the fetch, so it's gone after all: replace it as below.
       }
       // Gone. Forget it before anything else can fail, so the honeypot is never armed without a warning.
       await this.guildService.setHoneypotWarning(guildId, null);
@@ -238,28 +245,59 @@ export class HoneypotWarningSync {
     return "adopted";
   }
 
+  /**
+   * Posts a warning, stores its IDs and pins it. The pin always follows the store, so a pin that finds the warning
+   * gone catches a deletion that beat the store, which no delete handler could recognise. That warning is forgotten
+   * and another posted, up to MAX_POSTS_PER_SYNC posts.
+   */
   private async postWarning(guildId: string, channel: GuildTextBasedChannel, action: HoneypotAction): Promise<void> {
-    let posted: Message;
-    try {
-      posted = await channel.send({ embeds: [buildWarningEmbed(action)] });
-    } catch (err) {
-      // Nothing is stored, so the honeypot stays off.
-      await this.notify(
-        guildId,
-        `Couldn't post the honeypot warning in <#${channel.id}>: ${reasonFor(err)}. The honeypot is off until the warning is posted.`,
-        err,
-      );
-      return;
-    }
+    for (let posts = 0; posts < MAX_POSTS_PER_SYNC; posts++) {
+      let posted: Message;
+      try {
+        posted = await channel.send({ embeds: [buildWarningEmbed(action)] });
+      } catch (err) {
+        // Nothing is stored, so the honeypot stays off.
+        await this.notify(
+          guildId,
+          `Couldn't post the honeypot warning in <#${channel.id}>: ${reasonFor(err)}. The honeypot is off until the warning is posted.`,
+          err,
+        );
+        return;
+      }
 
-    try {
-      // Stored straight away: a posted warning arms the honeypot even if it can't be pinned.
-      await this.guildService.setHoneypotWarning(guildId, { channelId: channel.id, messageId: posted.id });
-      this.log.info({ guildId, channelId: channel.id, messageId: posted.id }, "Honeypot warning posted");
-    } finally {
-      // Pinned even when storing the IDs failed, so the next sync adopts it from the pins instead of posting another.
-      await this.pinWarning(guildId, channel.id, posted);
+      if ((await this.storeAndPin(guildId, channel.id, posted)) !== "gone") return;
+      // Deleted before its pin, so the honeypot must not stay armed on it.
+      this.log.warn({ guildId, channelId: channel.id, messageId: posted.id }, "Honeypot warning deleted before it was pinned");
+      await this.guildService.setHoneypotWarning(guildId, null);
     }
+    // The IDs stay cleared, so the honeypot stays off until a later sync gets a warning to stay up.
+    await this.notify(
+      guildId,
+      `The honeypot warning in <#${channel.id}> was deleted as soon as it was posted, ${MAX_POSTS_PER_SYNC} times in a row. ` +
+        "The honeypot is off until the warning stays up. Check for a bot or tool deleting messages there.",
+    );
+  }
+
+  /**
+   * Stores a new warning's IDs straight away, since a posted warning arms the honeypot even if it can't be pinned,
+   * then pins it. It's pinned even when storing the IDs failed, so the next sync adopts it from the pins instead of
+   * posting another, and the store's error is then rethrown. The exception is a pin that finds the warning gone:
+   * the caller clears the IDs and posts again either way, so the store's error is only logged.
+   */
+  private async storeAndPin(guildId: string, channelId: string, posted: Message): Promise<PinResult> {
+    let storeFailure: { err: unknown } | null = null;
+    try {
+      await this.guildService.setHoneypotWarning(guildId, { channelId, messageId: posted.id });
+      this.log.info({ guildId, channelId, messageId: posted.id }, "Honeypot warning posted");
+    } catch (err) {
+      storeFailure = { err };
+    }
+    const pin = await this.pinWarning(guildId, channelId, posted);
+    if (storeFailure) {
+      if (pin !== "gone") throw storeFailure.err;
+      this.log.warn({ err: storeFailure.err, guildId, channelId, messageId: posted.id }, "Couldn't store the honeypot warning's IDs");
+    }
+    return pin;
   }
 
   /** Edits the warning in place when its wording doesn't match the action. */
@@ -268,17 +306,23 @@ export class HoneypotWarningSync {
     await message.edit({ embeds: [buildWarningEmbed(action)] });
   }
 
-  /** Pins a warning. A failure is reported and costs only the pin: a posted warning still arms the honeypot. */
-  private async pinWarning(guildId: string, channelId: string, message: Message): Promise<void> {
+  /**
+   * Pins a warning. Unknown Message means the warning was deleted: that goes back to the caller, with no notice.
+   * Any other failure is reported and costs only the pin: a posted warning still arms the honeypot.
+   */
+  private async pinWarning(guildId: string, channelId: string, message: Message): Promise<PinResult> {
     try {
       await message.pin(PIN_REASON);
+      return "pinned";
     } catch (err) {
+      if (hasErrorCode(err, RESTJSONErrorCodes.UnknownMessage)) return "gone";
       const why = hasErrorCode(err, RESTJSONErrorCodes.MissingPermissions)
         ? "DragonBot needs the Pin Messages permission there"
         : hasErrorCode(err, RESTJSONErrorCodes.MaximumNumberOfPinsReachedForTheChannel)
           ? "the channel has reached Discord's pin limit"
           : reasonFor(err);
       await this.notify(guildId, `Couldn't pin the honeypot warning in <#${channelId}>: ${why}.`, err);
+      return "failed";
     }
   }
 
