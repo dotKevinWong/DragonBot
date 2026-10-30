@@ -675,6 +675,37 @@ describe("HoneypotWarningSync.sync", () => {
     expect(guildService.setHoneypotWarning).toHaveBeenCalledTimes(1);
   });
 
+  it("joins a sync still waiting to start instead of queueing another", async () => {
+    // A bot deleting each repost on arrival sends a delete event, and so a sync request, for each one.
+    const channel = fakeChannel("c1");
+    const { warning, guildService } = setupServer({}, { c1: channel });
+    const readRow = guildService.getSettingsFresh.getMockImplementation()!;
+    // Each sync starts by reading the settings. The test lets each read finish in turn, until it stops holding them.
+    const reads: Array<() => void> = [];
+    let holdReads = true;
+    guildService.getSettingsFresh.mockImplementation(async (guildId: string) => {
+      if (holdReads) await new Promise<void>((resolve) => reads.push(resolve));
+      return readRow(guildId);
+    });
+
+    const first = warning.sync("g1");
+    await vi.waitFor(() => expect(reads).toHaveLength(1));
+    // Asked while the first sync runs: one more sync covers all three, since it reads the settings when it starts.
+    const asked = [warning.sync("g1"), warning.sync("g1"), warning.sync("g1")];
+    reads[0]();
+    await vi.waitFor(() => expect(reads).toHaveLength(2));
+    // Asked once that sync has started: it may have read the settings already, so this gets a sync of its own.
+    const askedLater = warning.sync("g1");
+    reads[1]();
+    await vi.waitFor(() => expect(reads).toHaveLength(3));
+    holdReads = false;
+    reads[2]();
+    await Promise.all([first, ...asked, askedLater]);
+
+    expect(guildService.getSettingsFresh).toHaveBeenCalledTimes(3);
+    expect(channel.send).toHaveBeenCalledTimes(1);
+  });
+
   it("changes nothing when it runs again", async () => {
     const channel = fakeChannel("c1");
     const { warning, guildService, logging } = setupServer({}, { c1: channel });

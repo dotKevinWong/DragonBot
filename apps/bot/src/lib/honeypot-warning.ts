@@ -63,6 +63,8 @@ export class HoneypotWarningSync {
   private log: Logger;
   /** Notices already sent, by server and text, so a lasting problem is reported once a day, not on every sync. */
   private noticesSent = new TTLCache<true>(NOTICE_REPEAT_SECONDS);
+  /** The sync waiting for each server's lock, which later requests for that server join. */
+  private waitingSyncs = new Map<string, Promise<void>>();
 
   constructor(
     private client: Client,
@@ -74,13 +76,26 @@ export class HoneypotWarningSync {
     this.log = logger.child({ component: "honeypot-warning" });
   }
 
-  /** Brings one server's warning in line with its settings, one sync per server at a time. Never rejects. */
-  async sync(guildId: string): Promise<void> {
-    try {
-      await this.honeypot.runExclusive(guildId, () => this.reconcile(guildId));
-    } catch (err) {
-      this.log.warn({ err, guildId }, "Honeypot warning sync failed");
-    }
+  /**
+   * Brings one server's warning in line with its settings, one sync per server at a time. Never rejects.
+   * A request made while a sync for the server is still waiting to start joins that sync, which reads the settings
+   * when it starts. Otherwise a bot deleting each new warning on arrival, which sends a sync request per repost,
+   * would queue syncs faster than they run.
+   */
+  sync(guildId: string): Promise<void> {
+    const waiting = this.waitingSyncs.get(guildId);
+    if (waiting) return waiting;
+    const run = this.honeypot
+      .runExclusive(guildId, () => {
+        // Started: from here on it may have read the settings, so a new request needs a sync of its own.
+        this.waitingSyncs.delete(guildId);
+        return this.reconcile(guildId);
+      })
+      .catch((err: unknown) => {
+        this.log.warn({ err, guildId }, "Honeypot warning sync failed");
+      });
+    this.waitingSyncs.set(guildId, run);
+    return run;
   }
 
   /** Syncs, one after another, every server that is configured or still has a stored warning to remove. Never rejects. */
