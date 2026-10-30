@@ -187,7 +187,9 @@ function setup(rows: HoneypotRow[], guilds: Record<string, FakeGuild | Error>) {
       row.honeypotWarningChannelId = ids?.channelId ?? null;
       row.honeypotWarningMessageId = ids?.messageId ?? null;
     }),
+    // The settings cache holds every row, unless a test drops some.
     getAllCached: vi.fn(() => [...table.values()]),
+    hydrateAll: vi.fn(async () => table.size),
   };
   const client = {
     user: { id: BOT_ID },
@@ -753,5 +755,37 @@ describe("HoneypotWarningSync.syncAll", () => {
 
     expect(sync.mock.calls).toEqual([["configured"], ["off-with-warning"]]);
     expect(mostAtOnce).toBe(1);
+  });
+
+  it("visits a configured server that another write dropped from the settings cache", async () => {
+    // At startup the birthday check writes its servers' rows before this sync runs, and each write drops the row from the cache.
+    const kept = honeypotRow({ guildId: "g1" });
+    const dropped = honeypotRow({ guildId: "g2" });
+    const { warning, guildService } = setup([kept, dropped], {});
+    let cached = [kept];
+    guildService.getAllCached.mockImplementation(() => cached);
+    guildService.hydrateAll.mockImplementation(async () => {
+      cached = [kept, dropped];
+      return cached.length;
+    });
+    const sync = vi.spyOn(warning, "sync").mockResolvedValue();
+
+    await warning.syncAll();
+
+    expect(sync.mock.calls).toEqual([["g1"], ["g2"]]);
+  });
+
+  it("syncs the servers already cached when it can't re-read the settings", async () => {
+    const { warning, guildService, logger } = setup([honeypotRow({ guildId: "g1" })], {});
+    guildService.hydrateAll.mockRejectedValue(new Error("database is down"));
+    const sync = vi.spyOn(warning, "sync").mockResolvedValue();
+
+    await expect(warning.syncAll()).resolves.toBeUndefined();
+
+    expect(sync.mock.calls).toEqual([["g1"]]);
+    expect(logger.warn).toHaveBeenCalledWith(
+      { err: expect.any(Error) },
+      "Couldn't re-read the guild settings before the honeypot warning sync; syncing the cached servers",
+    );
   });
 });

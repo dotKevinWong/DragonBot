@@ -79,6 +79,13 @@ export class HoneypotWarningSync {
 
   /** Syncs, one after another, every server that is configured or still has a stored warning to remove. Never rejects. */
   async syncAll(): Promise<void> {
+    try {
+      // Each settings write drops its server from the cache (at startup the birthday check writes just before this
+      // runs), so the cache alone can miss servers. Re-read them all first.
+      await this.guildService.hydrateAll();
+    } catch (err) {
+      this.log.warn({ err }, "Couldn't re-read the guild settings before the honeypot warning sync; syncing the cached servers");
+    }
     const guildIds = this.guildService
       .getAllCached()
       .filter((row) => (row.isHoneypotEnabled && row.honeypotChannelId) || row.honeypotWarningMessageId)

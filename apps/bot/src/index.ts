@@ -177,19 +177,29 @@ async function main() {
       try {
         await xpService.flush();
         await guildService.hydrateAll();
-        await honeypotWarning.syncAll();
         await scheduler.reload();
         await birthdayChecker.check();
         await youtubeChecker.check();
-        logger.info("Periodic sync complete (XP flush + guild settings + honeypot warnings + schedule reload + birthday check + YouTube check)");
+        logger.info("Periodic sync complete (XP flush + guild settings + schedule reload + birthday check + YouTube check)");
       } catch (err) {
         logger.error({ err }, "Periodic sync failed");
+      }
+      // After the birthday check: it lists servers from the settings cache, and this sync's writes drop entries from it.
+      // Caught on its own, so a failed earlier step doesn't skip it.
+      try {
+        await honeypotWarning.syncAll();
+      } catch (err) {
+        logger.error({ err }, "Periodic honeypot warning sync failed");
       }
     }, FOUR_HOURS_MS);
     if (syncTimer.unref) syncTimer.unref();
 
-    // Last, so a slow sync can't hold back the webhook server or the timer. syncAll never rejects.
-    await honeypotWarning.syncAll();
+    // Last, so a slow sync can't hold back the webhook server or the timer. Caught here too, so it can't crash the bot.
+    try {
+      await honeypotWarning.syncAll();
+    } catch (err) {
+      logger.error({ err }, "Startup honeypot warning sync failed");
+    }
   });
 
   // 10. Login
