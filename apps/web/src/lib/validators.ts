@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { HONEYPOT_ACTIONS } from "@dragonbot/db";
 
 const VALID_LOG_EVENTS = [
   "member_join", "member_leave", "message_delete", "message_edit",
@@ -133,6 +134,10 @@ export const guildSettingsUpdateSchema = z.object({
   xpExcludedRoleIds: z.array(discordId).optional(),
   // YouTube Notifications
   isYoutubeEnabled: z.boolean().optional(),
+  // Honeypot (the warning channel and message IDs are written only by the bot)
+  isHoneypotEnabled: z.boolean().optional(),
+  honeypotChannelId: discordId.nullable().optional(),
+  honeypotAction: z.enum(HONEYPOT_ACTIONS).optional(),
   // Birthdays
   isBirthdayEnabled: z.boolean().optional(),
   birthdayChannelId: discordId.nullable().optional(),

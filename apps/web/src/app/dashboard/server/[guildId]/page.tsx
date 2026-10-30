@@ -26,6 +26,9 @@ interface GuildSettings {
   introUniqueWordRatio: number;
   introMaxRepeatedCharPct: number;
   modNotesChannelId: string | null;
+  isHoneypotEnabled: boolean;
+  honeypotChannelId: string | null;
+  honeypotAction: "kick" | "ban";
   isSuggestionsEnabled: boolean;
   isAskEnabled: boolean;
   askSystemPrompt: string | null;
@@ -79,12 +82,14 @@ function Toggle({ checked, onChange, label }: { checked: boolean; onChange: (v: 
   );
 }
 
-function ChannelSelect({ label, value, onChange, channels, filterType }: {
+function ChannelSelect({ label, value, onChange, channels, filterType, showUnknown }: {
   label: string;
   value: string | null;
   onChange: (v: string | null) => void;
   channels: DiscordChannel[];
   filterType?: string;
+  /** Show a stored channel that isn't in the list as "Unknown channel (<id>)" instead of "None". */
+  showUnknown?: boolean;
 }) {
   const filtered = filterType ? channels.filter((c) => c.type === filterType) : channels.filter((c) => c.type !== "category");
   return (
@@ -96,6 +101,9 @@ function ChannelSelect({ label, value, onChange, channels, filterType }: {
         onChange={(e) => onChange(e.target.value || null)}
       >
         <option value="">None</option>
+        {showUnknown && value && !filtered.some((ch) => ch.id === value) && (
+          <option value={value}>Unknown channel ({value})</option>
+        )}
         {filtered.map((ch) => (
           <option key={ch.id} value={ch.id}>
             {ch.type === "voice" ? "🔊" : "#"} {ch.name}
@@ -507,6 +515,7 @@ export default function ServerSettingsPage() {
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [hasDiscordData, setHasDiscordData] = useState(false);
+  const [showHoneypotChannelHint, setShowHoneypotChannelHint] = useState(false);
 
   const isDirty = useMemo(() => {
     if (!settings || !savedSettings) return false;
@@ -565,6 +574,8 @@ export default function ServerSettingsPage() {
       introMinSubstantiveWords: settings.introMinSubstantiveWords,
       introUniqueWordRatio: settings.introUniqueWordRatio,
       introMaxRepeatedCharPct: settings.introMaxRepeatedCharPct,
+      isHoneypotEnabled: settings.isHoneypotEnabled,
+      honeypotAction: settings.honeypotAction,
       isSuggestionsEnabled: settings.isSuggestionsEnabled,
       isAskEnabled: settings.isAskEnabled,
       askSystemPrompt: settings.askSystemPrompt,
@@ -593,6 +604,7 @@ export default function ServerSettingsPage() {
       updateFields.xpLevelupChannelId = settings.xpLevelupChannelId;
       updateFields.birthdayChannelId = settings.birthdayChannelId;
       updateFields.birthdayRoleId = settings.birthdayRoleId;
+      updateFields.honeypotChannelId = settings.honeypotChannelId;
     }
 
     const res = await fetch(`/api/server/${guildId}`, {
@@ -630,6 +642,7 @@ export default function ServerSettingsPage() {
   ];
 
   const textChannels = channels.filter((c) => c.type === "text" || c.type === "announcement");
+  const canEnableHoneypot = hasDiscordData && textChannels.some((c) => c.id === settings.honeypotChannelId);
 
   return (
     <div className="max-w-2xl">
@@ -737,6 +750,41 @@ export default function ServerSettingsPage() {
       <Section title="Moderation">
         <Toggle label="Cross-guild ban sync" checked={settings.isBanSyncEnabled} onChange={(v) => update("isBanSyncEnabled", v)} />
         <ChannelSelect label="Mod Notes Channel" value={settings.modNotesChannelId} onChange={(v) => update("modNotesChannelId", v)} channels={channels} filterType="text" />
+      </Section>
+
+      <Section title="Honeypot">
+        <Toggle
+          label="Enable honeypot"
+          checked={settings.isHoneypotEnabled}
+          onChange={(v) => {
+            // Turning it on needs a channel from the loaded list; turning it off always works
+            if (v && !canEnableHoneypot) {
+              setShowHoneypotChannelHint(true);
+              return;
+            }
+            setShowHoneypotChannelHint(false);
+            update("isHoneypotEnabled", v);
+          }}
+        />
+        {showHoneypotChannelHint && !canEnableHoneypot && <p className="text-xs text-dc-danger">Pick a channel first.</p>}
+        <ChannelSelect label="Honeypot Channel" value={settings.honeypotChannelId} onChange={(v) => update("honeypotChannelId", v)} channels={channels} filterType="text" showUnknown />
+        <div>
+          <label className="block text-xs font-semibold text-dc-text-secondary uppercase tracking-wide mb-1.5">Action</label>
+          <select
+            className="w-full px-3 py-2 bg-dc-input border border-dc-border rounded-md text-dc-text-primary text-sm outline-none focus:border-dc-accent transition-colors cursor-pointer"
+            value={settings.honeypotAction}
+            onChange={(e) => update("honeypotAction", e.target.value === "ban" ? "ban" : "kick")}
+          >
+            <option value="ban">Ban: removed for good</option>
+            <option value="kick">Kick: removed, can rejoin</option>
+          </select>
+        </div>
+        <div className="border-t border-dc-border pt-3 mt-1 space-y-1 text-xs text-dc-text-muted">
+          <p>Their messages from the last hour are cleaned up across the whole server either way.</p>
+          <p>Verified members only have the message deleted. Staff (Administrator, Manage Server, Kick Members or Ban Members) are ignored.</p>
+          <p>Honeypot bans are never copied to other servers by ban sync.</p>
+          <p>Pick a channel everyone can see and post in but nobody has a reason to use. Test it with an alt account: if you aren't staff, posting there removes you.</p>
+        </div>
       </Section>
 
       <Section title="Suggestions">

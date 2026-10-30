@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { eq } from "drizzle-orm";
-import { guilds, FIELD_SCOPE_MAP } from "@dragonbot/db";
+import { guilds, FIELD_SCOPE_MAP, HONEYPOT_CONFLICT_FIELDS, findHoneypotChannelConflict } from "@dragonbot/db";
 import { db } from "@/lib/db";
 import { getAuthenticatedUser } from "@/lib/auth";
 import { checkGuildPermission, getUserGuildPermissions } from "@/lib/discord";
@@ -105,6 +105,22 @@ export async function PATCH(
       if (effectiveMin > effectiveMax) {
         return NextResponse.json(
           { error: "xpMin cannot be greater than xpMax", code: "VALIDATION_ERROR" },
+          { status: 400 },
+        );
+      }
+    }
+  }
+
+  // Reject a honeypot channel shared with another channel setting, comparing the values after this
+  // update: the body's value where it sends one (null clears it), the stored value otherwise
+  const honeypotChannelFields = ["honeypotChannelId", ...Object.keys(HONEYPOT_CONFLICT_FIELDS)];
+  if (honeypotChannelFields.some((field) => field in parsed.data)) {
+    const existing = await db.select().from(guilds).where(eq(guilds.guildId, guildId)).limit(1);
+    if (existing[0]) {
+      const conflict = findHoneypotChannelConflict({ ...existing[0], ...parsed.data });
+      if (conflict) {
+        return NextResponse.json(
+          { error: `The honeypot channel can't be the same as the ${conflict} channel.`, code: "VALIDATION_ERROR" },
           { status: 400 },
         );
       }
