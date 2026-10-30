@@ -219,7 +219,10 @@ async function main() {
     }, 8000);
 
     try {
-      // Disconnect from Discord first to stop receiving new events
+      // Let in-flight honeypot actions finish: destroy() clears the REST token, which would strand a kick between
+      // its ban and its unban
+      await honeypotService.drain(5_000);
+      // Disconnect from Discord to stop receiving new events
       client.destroy();
       // Flush XP to database
       await xpService.flush();
