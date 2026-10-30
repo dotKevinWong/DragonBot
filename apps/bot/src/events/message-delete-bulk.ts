@@ -17,7 +17,9 @@ const event: BotEvent<"messageDeleteBulk"> = {
     // collection holds every deleted ID, cached or not.
     const settings = await ctx.services.guild.getSettings(guildId);
     const warningMessageId = settings?.honeypotWarningMessageId;
-    if (warningMessageId && messages.has(warningMessageId)) void ctx.honeypotWarning?.sync(guildId);
+    if (warningMessageId && messages.has(warningMessageId)) {
+      void ctx.honeypotWarning?.sync(guildId, { goneMessageId: warningMessageId });
+    }
   },
 };
 

@@ -12,11 +12,11 @@ const event: BotEvent<"messageDelete"> = {
 
     // Skip messages DragonBot deleted itself: the honeypot's trigger messages and its own warning.
     if (ctx.services.honeypot.consumeOwnDeletion(message.id)) return;
-    // Someone deleted the honeypot warning: put it back straight away.
-    // Checked before the bot check, because DragonBot wrote the warning.
+    // Someone deleted the honeypot warning: put it back straight away. The sync takes it as gone without fetching it,
+    // since a fetch can fail for other reasons. Checked before the bot check, because DragonBot wrote the warning.
     const settings = await ctx.services.guild.getSettings(guildId);
     if (message.id === settings?.honeypotWarningMessageId) {
-      void ctx.honeypotWarning?.sync(guildId);
+      void ctx.honeypotWarning?.sync(guildId, { goneMessageId: message.id });
       return;
     }
     // Skip the messages of an account the honeypot just removed, which Discord's ban cleanup deletes.

@@ -30,7 +30,8 @@ describe("messageDeleteBulk event", () => {
 
     expect(guild.getSettings).toHaveBeenCalledWith("g1");
     expect(honeypotWarning.sync).toHaveBeenCalledTimes(1);
-    expect(honeypotWarning.sync).toHaveBeenCalledWith("g1");
+    // The sync takes the warning as gone, whatever a fetch of it would say.
+    expect(honeypotWarning.sync).toHaveBeenCalledWith("g1", { goneMessageId: "w1" });
     // Bulk deletes aren't logged.
     expect(logging.shouldLog).not.toHaveBeenCalled();
     expect(logging.sendLogEmbed).not.toHaveBeenCalled();

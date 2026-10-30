@@ -8,7 +8,7 @@ import {
   type Message,
 } from "discord.js";
 import type { Logger } from "pino";
-import type { HoneypotAction } from "@dragonbot/db";
+import { findHoneypotChannelConflict, type GuildRow, type HoneypotAction } from "@dragonbot/db";
 import type { GuildService } from "../services/guild.service.js";
 import { WARNING_COLOR, WARNING_TITLE, warningText, type HoneypotService } from "../services/honeypot.service.js";
 import type { LoggingService } from "../services/logging.service.js";
@@ -22,8 +22,18 @@ const PINS_SEARCHED = 50;
 
 const PIN_REASON = "Honeypot warning";
 
-/** The most warnings one sync posts when each is deleted before it can be pinned. */
-const MAX_POSTS_PER_SYNC = 3;
+/** The most new warnings DragonBot posts in one server in any POST_WINDOW_MS, counted across syncs. */
+const MAX_POSTS_PER_WINDOW = 3;
+const POST_WINDOW_MS = 10 * 60 * 1000;
+
+/**
+ * How long a delete handler's word that a message was deleted waits for a sync to use it. A deleted message's ID never
+ * comes back, so a word that outlives its sync is harmless; this only bounds the memory.
+ */
+const GONE_HINT_SECONDS = 3_600;
+
+const CHANNEL_MISMATCH_NOTICE =
+  "The honeypot is off: its channel setting doesn't match a channel in this server. Pick the channel again in the dashboard.";
 
 interface StoredWarning {
   channelId: string;
@@ -33,9 +43,35 @@ interface StoredWarning {
 /** What pinning a warning found. "gone" is Unknown Message: the warning was deleted. Any other failure has been reported. */
 type PinResult = "pinned" | "gone" | "failed";
 
+/** What a sync's caller knows that the sync should act on. */
+export interface SyncOptions {
+  /** Forget the server's repost budget first: an admin asked for the warning again. */
+  resetBudget?: boolean;
+  /** A message a delete handler saw deleted. If it's the stored warning, the sync takes it as gone without fetching it. */
+  goneMessageId?: string;
+}
+
 /** The pinned warning: the title and the wording for the action, and nothing else. */
 export function buildWarningEmbed(action: HoneypotAction): EmbedBuilder {
   return new EmbedBuilder().setColor(WARNING_COLOR).setTitle(WARNING_TITLE).setDescription(warningText(action));
+}
+
+/**
+ * Why the honeypot can't be armed in this channel, as a notice, or null. Members are expected to post in the System
+ * Messages channel (Discord's "Wave to say hi" button) and in channels other DragonBot settings use.
+ */
+function armingRefusal(guild: Guild, row: GuildRow, channelId: string): string | null {
+  if (channelId === guild.systemChannelId) {
+    return (
+      `The honeypot is off: <#${channelId}> is this server's System Messages channel, where members' "Wave to say hi" ` +
+      "replies would get them removed. Pick another channel in the dashboard."
+    );
+  }
+  const conflict = findHoneypotChannelConflict(row);
+  if (conflict) {
+    return `The honeypot is off: <#${channelId}> is also this server's ${conflict} channel. Pick another channel in the dashboard.`;
+  }
+  return null;
 }
 
 function hasErrorCode(err: unknown, ...codes: number[]): boolean {
@@ -65,6 +101,10 @@ export class HoneypotWarningSync {
   private noticesSent = new TTLCache<true>(NOTICE_REPEAT_SECONDS);
   /** The sync waiting for each server's lock, which later requests for that server join. */
   private waitingSyncs = new Map<string, Promise<void>>();
+  /** When each server's recent new warnings were posted, oldest first, for its repost budget. Forgotten on a restart. */
+  private postTimes = new Map<string, number[]>();
+  /** Messages the delete handlers saw deleted, by server and message ID. */
+  private goneHints = new TTLCache<true>(GONE_HINT_SECONDS);
 
   constructor(
     private client: Client,
@@ -82,7 +122,10 @@ export class HoneypotWarningSync {
    * when it starts. Otherwise a bot deleting each new warning on arrival, which sends a sync request per repost,
    * would queue syncs faster than they run.
    */
-  sync(guildId: string): Promise<void> {
+  sync(guildId: string, options: SyncOptions = {}): Promise<void> {
+    // Before the join check, so a request that joins a waiting sync still counts.
+    if (options.resetBudget) this.postTimes.delete(guildId);
+    if (options.goneMessageId) this.goneHints.set(`${guildId}:${options.goneMessageId}`, true);
     const waiting = this.waitingSyncs.get(guildId);
     if (waiting) return waiting;
     const run = this.honeypot
@@ -122,7 +165,7 @@ export class HoneypotWarningSync {
     const row = await this.guildService.getSettingsFresh(guildId);
     if (!row) return;
 
-    const desired =
+    let desired =
       row.isHoneypotEnabled && row.honeypotChannelId
         ? { channelId: row.honeypotChannelId, action: row.honeypotAction }
         : null;
@@ -139,34 +182,52 @@ export class HoneypotWarningSync {
       return; // DragonBot isn't in that server.
     }
 
+    // A channel where members are expected to post gets no warning, exactly as if the honeypot were off.
+    const refusal = desired ? armingRefusal(guild, row, desired.channelId) : null;
+    if (refusal) desired = null;
+
     if (stored && (!desired || stored.channelId !== desired.channelId)) {
       await this.removeOldWarning(guild, stored);
       stored = null;
     }
+    if (refusal) await this.notify(guildId, refusal);
     if (!desired) return;
 
     const channel = await this.fetchHoneypotChannel(guild, desired.channelId, stored !== null);
     if (!channel) return;
+    if (channel.id !== desired.channelId) {
+      // Discord resolved the setting to another channel ID, for example a zero-padded one. The dashboard's checks
+      // compared the setting's string, so this channel may be one they would have refused.
+      if (stored) await this.removeOldWarning(guild, stored);
+      await this.notify(guildId, CHANNEL_MISMATCH_NOTICE);
+      return;
+    }
 
     if (stored) {
       let current: Message | null = null;
-      try {
-        // Forced, so the pinned flag comes from Discord rather than a cached copy that may be out of date.
-        current = await channel.messages.fetch({ message: stored.messageId, force: true });
-      } catch (err) {
-        if (!isGone(err)) {
-          // Can't tell whether it's still there: keep its IDs and don't post a second one.
-          await this.notify(guildId, `Couldn't check the honeypot warning in <#${channel.id}>: ${reasonFor(err)}.`, err);
-          return;
+      // A delete handler saw it deleted: it's gone, whatever a fetch would say now, Missing Access included.
+      if (!this.takeGoneHint(guildId, stored.messageId)) {
+        try {
+          // Forced, so the pinned flag comes from Discord rather than a cached copy that may be out of date.
+          current = await channel.messages.fetch({ message: stored.messageId, force: true });
+        } catch (err) {
+          if (!isGone(err)) {
+            // Can't tell whether it's still there: keep its IDs and don't post a second one.
+            await this.notify(guildId, `Couldn't check the honeypot warning in <#${channel.id}>: ${reasonFor(err)}.`, err);
+            return;
+          }
         }
       }
-      if (current) {
-        await this.updateWording(current, desired.action);
-        // Pinned, or a pin failure that has been reported: either way it's there, and it still arms the honeypot.
-        if (current.pinned || (await this.pinWarning(guildId, channel.id, current)) !== "gone") return;
-        // Its pin found it deleted since the fetch, so it's gone after all: replace it as below.
+      // Pinned, or a pin failure that has been reported: either way it's there, and it still arms the honeypot.
+      if (
+        current &&
+        (await this.updateWording(current, desired.action)) !== "gone" &&
+        (current.pinned || (await this.pinWarning(guildId, channel.id, current)) !== "gone")
+      ) {
+        return;
       }
-      // Gone. Forget it before anything else can fail, so the honeypot is never armed without a warning.
+      // Gone, including when the edit or the pin found it deleted since the fetch. Forget it before anything else can
+      // fail, so the honeypot is never armed without a warning.
       await this.guildService.setHoneypotWarning(guildId, null);
     }
 
@@ -223,9 +284,18 @@ export class HoneypotWarningSync {
     return channel;
   }
 
+  /** Whether a delete handler saw this message deleted. The word is used up. */
+  private takeGoneHint(guildId: string, messageId: string): boolean {
+    const key = `${guildId}:${messageId}`;
+    if (!this.goneHints.get(key)) return false;
+    this.goneHints.invalidate(key);
+    return true;
+  }
+
   /**
    * Adopts a warning DragonBot already pinned in the channel, such as one whose IDs failed to save, and deletes any
    * extras. A new warning should be posted only when this finds none: when the pins can't be read, one may be there.
+   * "none" also covers a warning adopted and then found deleted.
    */
   private async adoptPinnedWarning(
     guildId: string,
@@ -247,7 +317,11 @@ export class HoneypotWarningSync {
     if (!kept) return "none";
 
     await this.guildService.setHoneypotWarning(guildId, { channelId: channel.id, messageId: kept.id });
-    await this.updateWording(kept, action);
+    // The pins were read a round trip ago, and no delete handler recognises a deletion since: it compared the deleted
+    // message with the IDs stored before these. Checked before the edit, which would only throw.
+    const keptIsThere =
+      (await this.isStillThere(channel, kept.id)) && (await this.updateWording(kept, action)) !== "gone";
+    if (!keptIsThere) await this.guildService.setHoneypotWarning(guildId, null);
     for (const extra of extras) {
       try {
         await this.deleteOwnMessage(extra);
@@ -257,16 +331,39 @@ export class HoneypotWarningSync {
         }
       }
     }
-    return "adopted";
+    return keptIsThere ? "adopted" : "none";
+  }
+
+  /** False when a forced fetch finds the message gone. When the fetch can't tell, the message counts as there. */
+  private async isStillThere(channel: GuildTextBasedChannel, messageId: string): Promise<boolean> {
+    try {
+      await channel.messages.fetch({ message: messageId, force: true });
+      return true;
+    } catch (err) {
+      return !isGone(err);
+    }
   }
 
   /**
-   * Posts a warning, stores its IDs and pins it. The pin always follows the store, so a pin that finds the warning
-   * gone catches a deletion that beat the store, which no delete handler could recognise. That warning is forgotten
-   * and another posted, up to MAX_POSTS_PER_SYNC posts.
+   * Posts a warning, stores its IDs and pins it, within the server's repost budget. The pin always follows the store,
+   * so a pin that finds the warning gone catches a deletion that beat the store, which no delete handler could
+   * recognise. That warning is forgotten and another posted. Every post counts against the budget, whatever its
+   * reason, and syncs that deletions start share it, so a bot that deletes every warning can't keep DragonBot posting.
    */
   private async postWarning(guildId: string, channel: GuildTextBasedChannel, action: HoneypotAction): Promise<void> {
-    for (let posts = 0; posts < MAX_POSTS_PER_SYNC; posts++) {
+    for (;;) {
+      if (!this.hasPostBudget(guildId)) {
+        // Cleared again, so a spent budget can never leave the honeypot armed on a warning that's gone.
+        await this.guildService.setHoneypotWarning(guildId, null);
+        await this.notify(
+          guildId,
+          `The honeypot warning in <#${channel.id}> was deleted ${MAX_POSTS_PER_WINDOW} times in ${POST_WINDOW_MS / 60_000} minutes, ` +
+            "so DragonBot stopped posting it. The honeypot is off until the warning stays up: save the server's settings " +
+            "in the dashboard or run /admin reload to try again.",
+        );
+        return;
+      }
+
       let posted: Message;
       try {
         posted = await channel.send({ embeds: [buildWarningEmbed(action)] });
@@ -279,18 +376,26 @@ export class HoneypotWarningSync {
         );
         return;
       }
+      this.countPost(guildId);
 
       if ((await this.storeAndPin(guildId, channel.id, posted)) !== "gone") return;
       // Deleted before its pin, so the honeypot must not stay armed on it.
       this.log.warn({ guildId, channelId: channel.id, messageId: posted.id }, "Honeypot warning deleted before it was pinned");
       await this.guildService.setHoneypotWarning(guildId, null);
     }
-    // The IDs stay cleared, so the honeypot stays off until a later sync gets a warning to stay up.
-    await this.notify(
-      guildId,
-      `The honeypot warning in <#${channel.id}> was deleted as soon as it was posted, ${MAX_POSTS_PER_SYNC} times in a row. ` +
-        "The honeypot is off until the warning stays up. Check for a bot or tool deleting messages there.",
-    );
+  }
+
+  /** Whether the server has posted fewer than MAX_POSTS_PER_WINDOW warnings in the last POST_WINDOW_MS. */
+  private hasPostBudget(guildId: string): boolean {
+    const since = Date.now() - POST_WINDOW_MS;
+    const recent = (this.postTimes.get(guildId) ?? []).filter((postedAt) => postedAt > since);
+    if (recent.length > 0) this.postTimes.set(guildId, recent);
+    else this.postTimes.delete(guildId);
+    return recent.length < MAX_POSTS_PER_WINDOW;
+  }
+
+  private countPost(guildId: string): void {
+    this.postTimes.set(guildId, [...(this.postTimes.get(guildId) ?? []), Date.now()]);
   }
 
   /**
@@ -315,10 +420,16 @@ export class HoneypotWarningSync {
     return pin;
   }
 
-  /** Edits the warning in place when its wording doesn't match the action. */
-  private async updateWording(message: Message, action: HoneypotAction): Promise<void> {
-    if (message.embeds[0]?.description === warningText(action)) return;
-    await message.edit({ embeds: [buildWarningEmbed(action)] });
+  /** Edits the warning in place when its wording doesn't match the action. "gone" when the edit finds it deleted. */
+  private async updateWording(message: Message, action: HoneypotAction): Promise<"current" | "gone"> {
+    if (message.embeds[0]?.description === warningText(action)) return "current";
+    try {
+      await message.edit({ embeds: [buildWarningEmbed(action)] });
+    } catch (err) {
+      if (hasErrorCode(err, RESTJSONErrorCodes.UnknownMessage)) return "gone";
+      throw err;
+    }
+    return "current";
   }
 
   /**

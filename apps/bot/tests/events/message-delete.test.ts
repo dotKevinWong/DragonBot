@@ -161,7 +161,8 @@ describe("messageDelete event", () => {
       await event.execute(message, ctx);
 
       expect(honeypotWarning.sync).toHaveBeenCalledTimes(1);
-      expect(honeypotWarning.sync).toHaveBeenCalledWith("g1");
+      // The sync takes the warning as gone, whatever a fetch of it would say.
+      expect(honeypotWarning.sync).toHaveBeenCalledWith("g1", { goneMessageId: "w1" });
       expect(logging.shouldLog).not.toHaveBeenCalled();
       expect(logging.sendLogEmbed).not.toHaveBeenCalled();
     }

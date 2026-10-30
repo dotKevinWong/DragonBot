@@ -7,18 +7,26 @@ import {
   type APIEmbed,
   type Client,
   type EmbedBuilder,
+  type Message,
 } from "discord.js";
 import type { Logger } from "pino";
 import type { GuildRow, HoneypotAction } from "@dragonbot/db";
+import messageDelete from "../../src/events/message-delete.js";
 import { HoneypotWarningSync, buildWarningEmbed } from "../../src/lib/honeypot-warning.js";
 import { HoneypotService, WARNING_COLOR, WARNING_TITLE, warningText } from "../../src/services/honeypot.service.js";
 import type { GuildService } from "../../src/services/guild.service.js";
 import type { LoggingService } from "../../src/services/logging.service.js";
+import type { BotContext } from "../../src/types/context.js";
 
 const BOT_ID = "bot-self";
 
 /** What the sync logs when it gives up on a server because of an error it didn't expect. */
 const SYNC_FAILED = "Honeypot warning sync failed";
+
+/** The notice once a server's repost budget is spent, for the honeypot in c1. */
+const BUDGET_SPENT =
+  "The honeypot warning in <#c1> was deleted 3 times in 10 minutes, so DragonBot stopped posting it. " +
+  "The honeypot is off until the warning stays up: save the server's settings in the dashboard or run /admin reload to try again.";
 
 function apiError(code: number, message: string, status = 403) {
   return new DiscordAPIError({ code, message }, code, status, "PUT", "/x", {});
@@ -58,6 +66,10 @@ function fakeMessage(
     deleteError?: Error;
     /** Someone else deletes it just before DragonBot pins it, so the pin gets Unknown Message. */
     goneBeforePin?: boolean;
+    /** Someone else deletes it just after DragonBot pins it. */
+    goneAfterPin?: boolean;
+    /** Told when someone else deletes it, as Discord's delete event would tell DragonBot. */
+    onGone?: (message: FakeMessage) => void;
   } = {},
 ): FakeMessage {
   const message: FakeMessage = {
@@ -69,10 +81,15 @@ function fakeMessage(
     pin: vi.fn(async () => {
       if (options.goneBeforePin) {
         message.deleted = true;
+        options.onGone?.(message);
         throw unknownMessage();
       }
       if (options.pinError) throw options.pinError;
       message.pinned = true;
+      if (options.goneAfterPin) {
+        message.deleted = true;
+        options.onGone?.(message);
+      }
       return message;
     }),
     edit: vi.fn(async ({ embeds }: { embeds: EmbedBuilder[] }) => {
@@ -102,23 +119,31 @@ function fakeChannel(
     postedPinError?: Error;
     /** How many of the first posts someone else deletes before DragonBot can pin them, as a cleaner bot would. */
     postsGoneBeforePin?: number;
+    /** When a cleaner bot deletes each post, by its number from 1: before DragonBot pins it, just after, or not at all. */
+    cleaner?: (postNumber: number) => "before_pin" | "after_pin" | null;
     textBased?: boolean;
   } = {},
 ) {
   const messages = [...(options.messages ?? [])];
   const posted: FakeMessage[] = [];
   const present = () => messages.filter((message) => !message.deleted);
-  return {
+  const channel = {
     id,
     posted,
+    /** Told when someone else deletes a post, as Discord's delete event would tell DragonBot. */
+    onDeleted: undefined as ((message: FakeMessage) => void) | undefined,
     isTextBased: () => options.textBased ?? true,
     isSendable: () => options.textBased ?? true,
     send: vi.fn(async ({ embeds }: { embeds: EmbedBuilder[] }) => {
       if (options.sendError) throw options.sendError;
-      const message = fakeMessage(`${id}-posted-${posted.length + 1}`, {
+      const postNumber = posted.length + 1;
+      const cleanedUp = options.cleaner?.(postNumber) ?? null;
+      const message = fakeMessage(`${id}-posted-${postNumber}`, {
         pinned: false,
         pinError: options.postedPinError,
-        goneBeforePin: posted.length < (options.postsGoneBeforePin ?? 0),
+        goneBeforePin: posted.length < (options.postsGoneBeforePin ?? 0) || cleanedUp === "before_pin",
+        goneAfterPin: cleanedUp === "after_pin",
+        onGone: (gone) => channel.onDeleted?.(gone),
       });
       message.embeds = embeds.map((embed) => embed.toJSON());
       messages.push(message);
@@ -138,14 +163,19 @@ function fakeChannel(
       }),
     },
   };
+  return channel;
 }
 
 type FakeChannel = ReturnType<typeof fakeChannel>;
 
-/** A server whose channels are looked up by ID. A channel that isn't listed is gone. */
-function fakeGuild(id: string, channels: Record<string, FakeChannel | Error>) {
+/**
+ * A server whose channels are looked up by ID. A channel that isn't listed is gone. A channel listed under another
+ * key is what Discord resolves that ID to, as it does for a zero-padded ID.
+ */
+function fakeGuild(id: string, channels: Record<string, FakeChannel | Error>, options: { systemChannelId?: string } = {}) {
   return {
     id,
+    systemChannelId: options.systemChannelId ?? null,
     channels: {
       fetch: vi.fn(async (channelId: string) => {
         const channel = channels[channelId];
@@ -167,6 +197,7 @@ type HoneypotRow = Pick<
   | "honeypotAction"
   | "honeypotWarningChannelId"
   | "honeypotWarningMessageId"
+  | "introChannelId"
 >;
 
 /** By default the honeypot is on in channel c1, set to kick, and no warning is stored. */
@@ -178,6 +209,7 @@ function honeypotRow(overrides: Partial<HoneypotRow> = {}): HoneypotRow {
     honeypotAction: "kick",
     honeypotWarningChannelId: null,
     honeypotWarningMessageId: null,
+    introChannelId: null,
     ...overrides,
   };
 }
@@ -190,6 +222,11 @@ function setup(rows: HoneypotRow[], guilds: Record<string, FakeGuild | Error>) {
   const table = new Map(rows.map((row) => [row.guildId, { ...row }]));
   const guildService = {
     getSettingsFresh: vi.fn(async (guildId: string) => {
+      const row = table.get(guildId);
+      return row ? { ...row } : null;
+    }),
+    // The delete handlers read the settings cache, which here always agrees with the table.
+    getSettings: vi.fn(async (guildId: string) => {
       const row = table.get(guildId);
       return row ? { ...row } : null;
     }),
@@ -230,9 +267,49 @@ function setup(rows: HoneypotRow[], guilds: Record<string, FakeGuild | Error>) {
 }
 
 /** One server, g1, with the honeypot row changed by the overrides. */
-function setupServer(overrides: Partial<HoneypotRow>, channels: Record<string, FakeChannel | Error>) {
-  const guild = fakeGuild("g1", channels);
+function setupServer(
+  overrides: Partial<HoneypotRow>,
+  channels: Record<string, FakeChannel | Error>,
+  guildOptions: { systemChannelId?: string } = {},
+) {
+  const guild = fakeGuild("g1", channels, guildOptions);
   return { ...setup([honeypotRow(overrides)], { g1: guild }), guild };
+}
+
+/**
+ * Wires Discord's delete event to the real messageDelete handler, which resyncs when the stored warning is deleted.
+ * `settled` waits for every handler and every sync started so far, including the syncs they start.
+ */
+function deleteEvents(server: ReturnType<typeof setup>) {
+  const { warning, guildService, honeypot, logging, logger } = server;
+  const ctx = { logger, services: { honeypot, guild: guildService, logging }, honeypotWarning: warning } as unknown as BotContext;
+  const syncs = vi.spyOn(warning, "sync");
+  const handled: Promise<void>[] = [];
+  return {
+    syncs,
+    /** Discord tells DragonBot that one of its messages was deleted. */
+    deleted(messageId: string) {
+      const deletion = { id: messageId, guild: { id: "g1" }, author: { id: BOT_ID, bot: true } };
+      handled.push(messageDelete.execute(deletion as unknown as Message, ctx));
+    },
+    async settled() {
+      for (let seen = -1; seen !== handled.length + syncs.mock.results.length; ) {
+        seen = handled.length + syncs.mock.results.length;
+        await Promise.all([...handled, ...syncs.mock.results.map((result) => result.value as Promise<void>)]);
+      }
+    },
+  };
+}
+
+/** Holds each sync at its settings read, in the order they start, until the test lets it go. */
+function holdSettingsReads(guildService: ReturnType<typeof setup>["guildService"]): Array<() => void> {
+  const readRow = guildService.getSettingsFresh.getMockImplementation()!;
+  const held: Array<() => void> = [];
+  guildService.getSettingsFresh.mockImplementation(async (guildId: string) => {
+    await new Promise<void>((resolve) => held.push(resolve));
+    return readRow(guildId);
+  });
+  return held;
 }
 
 /** The warn logs for servers the sync gave up on because of an error it didn't expect. */
@@ -560,11 +637,8 @@ describe("HoneypotWarningSync.sync", () => {
     expect(logging.sendNotice).not.toHaveBeenCalled();
   });
 
-  it("gives up after three warnings are deleted before they are pinned", async () => {
-    const givenUp =
-      "The honeypot warning in <#c1> was deleted as soon as it was posted, 3 times in a row. " +
-      "The honeypot is off until the warning stays up. Check for a bot or tool deleting messages there.";
-    // Nothing stored yet, and a stored warning found unpinned whose pin finds it gone: the same limit of 3 posts.
+  it("stops posting once three warnings are deleted before they are pinned", async () => {
+    // Nothing stored yet, and a stored warning found unpinned whose pin finds it gone: the same budget of 3 posts.
     const starts = [
       { row: {}, messages: [], cleared: [] },
       {
@@ -587,13 +661,313 @@ describe("HoneypotWarningSync.sync", () => {
           ["g1", { channelId: "c1", messageId: post.id }],
           ["g1", null],
         ]),
+        // Cleared once more as the budget runs out, so nothing can leave the honeypot armed.
+        ["g1", null],
       ]);
       // The IDs stay cleared, so the honeypot stays off.
       expect(await guildService.getSettingsFresh("g1")).toMatchObject({
         honeypotWarningChannelId: null,
         honeypotWarningMessageId: null,
       });
-      expect(notices(logging)).toEqual([givenUp]);
+      expect(notices(logging)).toEqual([BUDGET_SPENT]);
+      expect(syncFailures(logger)).toEqual([]);
+    }
+  });
+
+  it("stops reposting after three warnings in ten minutes, across the syncs their deletions start", async () => {
+    // A cleaner bot deletes every new message in the channel, some just before DragonBot pins them and some just after.
+    // Each deletion of the stored warning reaches the delete handler, which starts another sync. The cleaner gives up
+    // after 10 posts, so the test ends even if the syncs don't.
+    const channel = fakeChannel("c1", { cleaner: (post) => (post > 10 ? null : post % 2 === 1 ? "before_pin" : "after_pin") });
+    const server = setupServer({}, { c1: channel });
+    const events = deleteEvents(server);
+    channel.onDeleted = (message) => events.deleted(message.id);
+
+    await server.warning.sync("g1");
+    await events.settled();
+
+    expect(channel.posted).toHaveLength(3);
+    expect(channel.posted.every((post) => post.deleted)).toBe(true);
+    // A deletion after the pin started at least one more sync.
+    expect(server.guildService.getSettingsFresh.mock.calls.length).toBeGreaterThan(1);
+    expect(await server.guildService.getSettingsFresh("g1")).toMatchObject({
+      honeypotWarningChannelId: null,
+      honeypotWarningMessageId: null,
+    });
+    expect(notices(server.logging)).toEqual([BUDGET_SPENT]);
+    expect(syncFailures(server.logger)).toEqual([]);
+  });
+
+  it("posts again once ten minutes have passed since the earliest counted post", async () => {
+    vi.useFakeTimers();
+    const start = Date.now();
+    const channel = fakeChannel("c1");
+    const { warning, guildService, logging } = setupServer({}, { c1: channel });
+    // Three warnings, each deleted a few minutes after it was posted, so each sync finds the last one gone.
+    for (const minute of [0, 4, 8]) {
+      vi.setSystemTime(start + minute * 60_000);
+      await warning.sync("g1");
+      channel.posted.at(-1)!.deleted = true;
+    }
+    expect(channel.posted).toHaveLength(3);
+
+    vi.setSystemTime(start + 9 * 60_000);
+    await warning.sync("g1");
+    expect(channel.posted).toHaveLength(3);
+    expect(notices(logging)).toEqual([BUDGET_SPENT]);
+
+    // The first post still counts until a full 10 minutes have passed.
+    vi.setSystemTime(start + 10 * 60_000 - 1);
+    await warning.sync("g1");
+    expect(channel.posted).toHaveLength(3);
+
+    vi.setSystemTime(start + 10 * 60_000);
+    await warning.sync("g1");
+    expect(channel.posted).toHaveLength(4);
+    expect(channel.posted[3].pinned).toBe(true);
+    expect(guildService.setHoneypotWarning).toHaveBeenLastCalledWith("g1", { channelId: "c1", messageId: channel.posted[3].id });
+  });
+
+  it("posts again straight away when the sync resets the budget", async () => {
+    const channel = fakeChannel("c1", { postsGoneBeforePin: 3 });
+    const { warning, guildService, logging, logger } = setupServer({}, { c1: channel });
+
+    await warning.sync("g1");
+    expect(channel.posted).toHaveLength(3);
+    // For example the 4-hour sync: the budget is still spent.
+    await warning.sync("g1");
+    expect(channel.posted).toHaveLength(3);
+
+    // A dashboard save for the server, or /admin reload there.
+    await warning.sync("g1", { resetBudget: true });
+
+    expect(channel.posted).toHaveLength(4);
+    expect(channel.posted[3].pinned).toBe(true);
+    expect(guildService.setHoneypotWarning).toHaveBeenLastCalledWith("g1", { channelId: "c1", messageId: channel.posted[3].id });
+    expect(notices(logging)).toEqual([BUDGET_SPENT]);
+    expect(syncFailures(logger)).toEqual([]);
+  });
+
+  it("resets the budget when the request joins a waiting sync", async () => {
+    const channel = fakeChannel("c1", { postsGoneBeforePin: 3 });
+    const { warning, guildService } = setupServer({}, { c1: channel });
+    await warning.sync("g1");
+    expect(channel.posted).toHaveLength(3);
+    const held = holdSettingsReads(guildService);
+
+    const running = warning.sync("g1");
+    await vi.waitFor(() => expect(held).toHaveLength(1));
+    const waiting = warning.sync("g1");
+    const joined = warning.sync("g1", { resetBudget: true });
+    expect(joined).toBe(waiting);
+    held[0]();
+    await vi.waitFor(() => expect(held).toHaveLength(2));
+    held[1]();
+    await Promise.all([running, waiting]);
+
+    expect(channel.posted).toHaveLength(4);
+    expect(guildService.setHoneypotWarning).toHaveBeenLastCalledWith("g1", { channelId: "c1", messageId: channel.posted[3].id });
+  });
+
+  it("treats a warning the delete handler saw deleted as gone, without fetching it", async () => {
+    // DragonBot lost Read Message History in the channel after posting, so fetching the warning answers Missing Access.
+    const stored = fakeMessage("w1");
+    const channel = fakeChannel("c1", { messages: [stored], fetchError: missingAccess() });
+    const server = setupServer({ honeypotWarningChannelId: "c1", honeypotWarningMessageId: "w1" }, { c1: channel });
+    const events = deleteEvents(server);
+
+    // A moderator deletes the warning.
+    stored.deleted = true;
+    events.deleted("w1");
+    await events.settled();
+
+    expect(channel.messages.fetch).not.toHaveBeenCalled();
+    expect(channel.posted).toHaveLength(1);
+    expect(channel.posted[0].pinned).toBe(true);
+    expect(server.guildService.setHoneypotWarning.mock.calls).toEqual([
+      ["g1", null],
+      ["g1", { channelId: "c1", messageId: channel.posted[0].id }],
+    ]);
+    expect(server.logging.sendNotice).not.toHaveBeenCalled();
+    expect(syncFailures(server.logger)).toEqual([]);
+    expect(events.syncs.mock.calls).toEqual([["g1", { goneMessageId: "w1" }]]);
+  });
+
+  it("keeps the delete handler's word when its request joins a waiting sync", async () => {
+    const stored = fakeMessage("w1");
+    const channel = fakeChannel("c1", { messages: [stored] });
+    const { warning, guildService, logging } = setupServer(
+      { honeypotWarningChannelId: "c1", honeypotWarningMessageId: "w1" },
+      { c1: channel },
+    );
+    const held = holdSettingsReads(guildService);
+
+    const running = warning.sync("g1");
+    await vi.waitFor(() => expect(held).toHaveLength(1));
+    const waiting = warning.sync("g1");
+    // A moderator deletes the warning while both syncs wait.
+    stored.deleted = true;
+    const joined = warning.sync("g1", { goneMessageId: "w1" });
+    expect(joined).toBe(waiting);
+    held[0]();
+    await vi.waitFor(() => expect(held).toHaveLength(2));
+    held[1]();
+    await Promise.all([running, waiting]);
+
+    // Taken as gone without asking Discord, which can't always say.
+    expect(channel.messages.fetch).not.toHaveBeenCalledWith({ message: "w1", force: true });
+    expect(channel.posted).toHaveLength(1);
+    expect(guildService.setHoneypotWarning.mock.calls).toEqual([
+      ["g1", null],
+      ["g1", { channelId: "c1", messageId: channel.posted[0].id }],
+    ]);
+    expect(logging.sendNotice).not.toHaveBeenCalled();
+  });
+
+  it("replaces an adopted warning that was deleted after the pins were read", async () => {
+    // The admin changed the action as well, so the old wording would need an edit.
+    for (const action of ["kick", "ban"] as const) {
+      const kept = fakeMessage("w-a", { action: "kick" });
+      const duplicate = fakeMessage("w-b");
+      const channel = fakeChannel("c1", { messages: [kept, duplicate] });
+      const { warning, guildService, logging, logger } = setupServer({ honeypotAction: action }, { c1: channel });
+      // Someone deletes the kept warning just after the sync reads the pins.
+      const readPins = channel.messages.fetchPins.getMockImplementation()!;
+      channel.messages.fetchPins.mockImplementationOnce(async () => {
+        const pins = await readPins();
+        kept.deleted = true;
+        return pins;
+      });
+
+      await warning.sync("g1");
+
+      expect(channel.messages.fetch).toHaveBeenCalledWith({ message: "w-a", force: true });
+      expect(kept.edit).not.toHaveBeenCalled();
+      expect(duplicate.delete).toHaveBeenCalledTimes(1);
+      expect(channel.posted).toHaveLength(1);
+      const posted = channel.posted[0];
+      expect(posted.pinned).toBe(true);
+      expect(guildService.setHoneypotWarning.mock.calls).toEqual([
+        ["g1", { channelId: "c1", messageId: "w-a" }],
+        ["g1", null],
+        ["g1", { channelId: "c1", messageId: posted.id }],
+      ]);
+      expect(logging.sendNotice).not.toHaveBeenCalled();
+      expect(syncFailures(logger)).toEqual([]);
+    }
+  });
+
+  it("keeps an adopted warning it can't check", async () => {
+    const kept = fakeMessage("w-a", { action: "kick" });
+    const channel = fakeChannel("c1", { messages: [kept], fetchError: missingAccess() });
+    const { warning, guildService, logging, logger } = setupServer({ honeypotAction: "ban" }, { c1: channel });
+
+    await warning.sync("g1");
+
+    expect(channel.messages.fetch).toHaveBeenCalledWith({ message: "w-a", force: true });
+    expect(guildService.setHoneypotWarning.mock.calls).toEqual([["g1", { channelId: "c1", messageId: "w-a" }]]);
+    expect(kept.edit).toHaveBeenCalledWith({ embeds: [warningEmbedFor("ban")] });
+    expect(channel.send).not.toHaveBeenCalled();
+    expect(logging.sendNotice).not.toHaveBeenCalled();
+    expect(syncFailures(logger)).toEqual([]);
+  });
+
+  it("replaces a warning whose wording edit finds it gone", async () => {
+    // Deleted between the sync's fetch and its edit: a stored warning, and one adopted from the pins.
+    const starts = [
+      { row: { honeypotWarningChannelId: "c1", honeypotWarningMessageId: "w1" }, stored: [] },
+      { row: {}, stored: [["g1", { channelId: "c1", messageId: "w1" }]] },
+    ];
+    for (const start of starts) {
+      const warningMessage = fakeMessage("w1", { action: "kick" });
+      warningMessage.edit.mockImplementationOnce(async () => {
+        warningMessage.deleted = true;
+        throw unknownMessage();
+      });
+      const channel = fakeChannel("c1", { messages: [warningMessage] });
+      const { warning, guildService, logging, logger } = setupServer({ ...start.row, honeypotAction: "ban" }, { c1: channel });
+
+      await warning.sync("g1");
+
+      expect(warningMessage.edit).toHaveBeenCalledTimes(1);
+      expect(channel.posted).toHaveLength(1);
+      const posted = channel.posted[0];
+      expect(posted.embeds[0].description).toBe(warningText("ban"));
+      expect(posted.pinned).toBe(true);
+      expect(guildService.setHoneypotWarning.mock.calls).toEqual([
+        ...start.stored,
+        ["g1", null],
+        ["g1", { channelId: "c1", messageId: posted.id }],
+      ]);
+      expect(logging.sendNotice).not.toHaveBeenCalled();
+      expect(syncFailures(logger)).toEqual([]);
+    }
+  });
+
+  it("removes the warning and posts none in the server's System Messages channel", async () => {
+    // Discord's "Wave to say hi" button makes members post a reply there.
+    const stored = fakeMessage("w1");
+    const channel = fakeChannel("c1", { messages: [stored] });
+    const { warning, guildService, honeypot, logging, logger } = setupServer(
+      { honeypotWarningChannelId: "c1", honeypotWarningMessageId: "w1" },
+      { c1: channel },
+      { systemChannelId: "c1" },
+    );
+
+    await warning.sync("g1");
+
+    expect(channel.send).not.toHaveBeenCalled();
+    expect(stored.delete).toHaveBeenCalledTimes(1);
+    expect(honeypot.consumeOwnDeletion("w1")).toBe(true);
+    expect(guildService.setHoneypotWarning.mock.calls).toEqual([["g1", null]]);
+    expect(notices(logging)).toEqual([
+      "The honeypot is off: <#c1> is this server's System Messages channel, where members' \"Wave to say hi\" replies " +
+        "would get them removed. Pick another channel in the dashboard.",
+    ]);
+    expect(syncFailures(logger)).toEqual([]);
+  });
+
+  it("removes the warning and posts none in a channel another setting uses", async () => {
+    // For example two dashboard saves at the same moment, each passing the dashboard's check before the other's write.
+    const stored = fakeMessage("w1");
+    const channel = fakeChannel("c1", { messages: [stored] });
+    const { warning, guildService, honeypot, logging, logger } = setupServer(
+      { introChannelId: "c1", honeypotWarningChannelId: "c1", honeypotWarningMessageId: "w1" },
+      { c1: channel },
+    );
+
+    await warning.sync("g1");
+
+    expect(channel.send).not.toHaveBeenCalled();
+    expect(stored.delete).toHaveBeenCalledTimes(1);
+    expect(honeypot.consumeOwnDeletion("w1")).toBe(true);
+    expect(guildService.setHoneypotWarning.mock.calls).toEqual([["g1", null]]);
+    expect(notices(logging)).toEqual([
+      "The honeypot is off: <#c1> is also this server's intro channel. Pick another channel in the dashboard.",
+    ]);
+    expect(syncFailures(logger)).toEqual([]);
+  });
+
+  it("removes the warning and posts none when Discord resolves the channel setting to another ID", async () => {
+    // A zero-padded ID passes the dashboard's checks, which compare strings. The stored warning is either where an
+    // earlier sync posted it, under the channel's own ID, or under the setting itself.
+    for (const storedChannelId of ["c1", "0c1"]) {
+      const stored = fakeMessage("w1");
+      const channel = fakeChannel("c1", { messages: [stored] });
+      const { warning, guildService, honeypot, logging, logger } = setupServer(
+        { honeypotChannelId: "0c1", honeypotWarningChannelId: storedChannelId, honeypotWarningMessageId: "w1" },
+        { "0c1": channel, c1: channel },
+      );
+
+      await warning.sync("g1");
+
+      expect(channel.send).not.toHaveBeenCalled();
+      expect(stored.delete).toHaveBeenCalledTimes(1);
+      expect(honeypot.consumeOwnDeletion("w1")).toBe(true);
+      expect(guildService.setHoneypotWarning.mock.calls).toEqual([["g1", null]]);
+      expect(notices(logging)).toEqual([
+        "The honeypot is off: its channel setting doesn't match a channel in this server. Pick the channel again in the dashboard.",
+      ]);
       expect(syncFailures(logger)).toEqual([]);
     }
   });
