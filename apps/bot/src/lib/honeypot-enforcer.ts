@@ -7,7 +7,7 @@ import {
   type Message,
 } from "discord.js";
 import type { Logger } from "pino";
-import { HONEYPOT_ACTIONS, type GuildRow, type HoneypotAction } from "@dragonbot/db";
+import { HONEYPOT_ACTIONS, findHoneypotChannelConflict, type GuildRow, type HoneypotAction } from "@dragonbot/db";
 import {
   CLEANUP_SECONDS,
   SWEEP_DELAY_MS,
@@ -71,14 +71,25 @@ function cutReason(reason: string): string {
   return reason.slice(0, MAX_REASON_LENGTH);
 }
 
-/** The honeypot is on in this channel and its warning is posted there. No warning, no enforcement. */
-function isArmedIn(settings: GuildRow, channelId: string): boolean {
+/**
+ * The honeypot is on in the message's channel, its warning is posted there, and the message was posted after the
+ * warning. No warning, no enforcement: a post from before the warning existed was made without one shown.
+ */
+function isArmedFor(settings: GuildRow, message: Message<true>): boolean {
   return (
     settings.isHoneypotEnabled &&
-    settings.honeypotChannelId === channelId &&
+    settings.honeypotChannelId === message.channelId &&
     settings.honeypotWarningChannelId === settings.honeypotChannelId &&
-    !!settings.honeypotWarningMessageId
+    !!settings.honeypotWarningMessageId &&
+    isNewerSnowflake(message.id, settings.honeypotWarningMessageId)
   );
+}
+
+const ALL_DIGITS = /^\d+$/;
+
+/** Whether snowflake `id` was made after snowflake `than`. False when either isn't all digits, so nothing is enforced. */
+function isNewerSnowflake(id: string, than: string): boolean {
+  return ALL_DIGITS.test(id) && ALL_DIGITS.test(than) && BigInt(id) > BigInt(than);
 }
 
 function isVerified(member: GuildMember, verificationRoleId: string | null): boolean {
@@ -117,7 +128,10 @@ export async function handleHoneypotMessage(
   settings: GuildRow,
   ctx: BotContext,
 ): Promise<"not_honeypot" | "handled"> {
-  if (!isArmedIn(settings, message.channelId)) return "not_honeypot";
+  if (!isArmedFor(settings, message)) return "not_honeypot";
+  // Members are expected to post in the System Messages channel: Discord's "Wave to say hi" button posts a reply,
+  // which isn't a system message. Read from the gateway's copy of the server, so a later change there counts too.
+  if (message.channelId === message.guild.systemChannelId) return "not_honeypot";
   const honeypot = ctx.services.honeypot;
   // Noted as the tracked work begins, which is when the message arrived. A message that arrived before the drain
   // began is handled in full, even if the drain begins while it waits for its settings re-read.
@@ -144,8 +158,14 @@ async function handleArmedMessage(
   if (decision.type === "ignore") return "handled";
 
   // Re-read before deleting or removing anything: the dashboard's reload ping can be lost, leaving the cache stale.
+  // A channel another setting uses is one members post in, for example after two dashboard saves at the same moment.
   const fresh = await ctx.services.guild.getSettingsFresh(message.guildId);
-  if (!fresh || !isArmedIn(fresh, message.channelId) || !HONEYPOT_ACTIONS.includes(fresh.honeypotAction)) {
+  if (
+    !fresh ||
+    !isArmedFor(fresh, message) ||
+    !HONEYPOT_ACTIONS.includes(fresh.honeypotAction) ||
+    findHoneypotChannelConflict(fresh) !== null
+  ) {
     return "not_honeypot";
   }
   if (decision.type === "delete_only") {

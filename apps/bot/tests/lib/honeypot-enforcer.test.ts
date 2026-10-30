@@ -67,6 +67,7 @@ function fakeGuild() {
       remove: vi.fn(async (_userId: string, _reason?: string): Promise<unknown> => null),
     },
     channels: { cache: new Collection<string, unknown>() },
+    systemChannelId: null as string | null,
   };
 }
 
@@ -122,7 +123,10 @@ type FakeMessage = ReturnType<typeof fakeMessage>;
 
 const asMessage = (message: FakeMessage) => message as unknown as Message<true>;
 
-/** The honeypot is armed in trap, with its warning w1 posted there. Members with verified-role are verified. */
+/**
+ * The honeypot is armed in trap, with its warning 100 posted there before the test's posts (111 and up). Members with
+ * verified-role are verified.
+ */
 function honeypotRow(overrides: Record<string, unknown> = {}): GuildRow {
   return {
     guildId: "g1",
@@ -130,7 +134,7 @@ function honeypotRow(overrides: Record<string, unknown> = {}): GuildRow {
     honeypotChannelId: "trap",
     honeypotAction: "kick",
     honeypotWarningChannelId: "trap",
-    honeypotWarningMessageId: "w1",
+    honeypotWarningMessageId: "100",
     verificationRoleId: "verified-role",
     ...overrides,
   } as unknown as GuildRow;
@@ -260,6 +264,81 @@ describe("handleHoneypotMessage", () => {
       expect(guild.members.ban).not.toHaveBeenCalled();
       expect(logging.sendLogEmbed).not.toHaveBeenCalled();
     }
+  });
+
+  it("leaves a honeypot in the server's System Messages channel alone", async () => {
+    // Discord's "Wave to say hi" button posts the member's sticker as a reply to a join notice, and a reply isn't a
+    // system message. The check also holds when the System Messages channel moved there after the honeypot was armed.
+    for (const member of [fakeMember(), fakeMember({ roleIds: ["verified-role"] })]) {
+      const { guild, logging, guildService, run } = setup({ row: { honeypotAction: "ban" } });
+      guild.systemChannelId = "trap";
+      const message = fakeMessage(guild, { member });
+
+      await expect(run(message)).resolves.toBe("not_honeypot");
+
+      expect(message.delete).not.toHaveBeenCalled();
+      expect(guild.members.ban).not.toHaveBeenCalled();
+      expect(logging.sendLogEmbed).not.toHaveBeenCalled();
+      expect(logging.sendNotice).not.toHaveBeenCalled();
+      // Decided from the gateway's copy of the server, before any lookup or re-read.
+      expect(guild.members.fetch).not.toHaveBeenCalled();
+      expect(guildService.getSettingsFresh).not.toHaveBeenCalled();
+    }
+  });
+
+  it("removes nobody when the fresh row shares the honeypot channel with another setting", async () => {
+    // For example two dashboard saves at the same moment, each passing the dashboard's check before the other's write.
+    for (const member of [fakeMember(), fakeMember({ roleIds: ["verified-role"] })]) {
+      const { guild, logging, guildService, run } = setup({ fresh: { introChannelId: "trap" } });
+      const message = fakeMessage(guild, { member });
+
+      await expect(run(message)).resolves.toBe("not_honeypot");
+
+      expect(guildService.getSettingsFresh).toHaveBeenCalledWith("g1");
+      expect(message.delete).not.toHaveBeenCalled();
+      expect(guild.members.ban).not.toHaveBeenCalled();
+      expect(logging.sendLogEmbed).not.toHaveBeenCalled();
+      expect(logging.sendNotice).not.toHaveBeenCalled();
+    }
+  });
+
+  it("leaves a post that isn't newer than the warning alone", async () => {
+    // A gateway replay, or a post made while the warning was being replaced, was made with no warning shown.
+    const cases = [
+      { warning: "100", post: "99" },
+      { warning: "100", post: "100" },
+      // Not a snowflake: nothing can be compared, so nothing is done.
+      { warning: "w1", post: "111" },
+      { warning: "100", post: "m111" },
+    ];
+    for (const { warning, post } of cases) {
+      const { guild, logging, guildService, run } = setup({ row: { honeypotWarningMessageId: warning } });
+      const message = fakeMessage(guild, { id: post });
+
+      await expect(run(message)).resolves.toBe("not_honeypot");
+
+      expect(message.delete).not.toHaveBeenCalled();
+      expect(guild.members.ban).not.toHaveBeenCalled();
+      expect(logging.sendLogEmbed).not.toHaveBeenCalled();
+      // Decided from the cached row, before any settings re-read.
+      expect(guildService.getSettingsFresh).not.toHaveBeenCalled();
+    }
+  });
+
+  it("leaves a post alone when the fresh row's warning is newer than it", async () => {
+    // The cached warning is older than the post, but the warning was replaced after the post was made.
+    const { guild, logging, guildService, run } = setup({
+      row: { honeypotWarningMessageId: "100" },
+      fresh: { honeypotWarningMessageId: "200" },
+    });
+    const message = fakeMessage(guild, { id: "150" });
+
+    await expect(run(message)).resolves.toBe("not_honeypot");
+
+    expect(guildService.getSettingsFresh).toHaveBeenCalledWith("g1");
+    expect(message.delete).not.toHaveBeenCalled();
+    expect(guild.members.ban).not.toHaveBeenCalled();
+    expect(logging.sendLogEmbed).not.toHaveBeenCalled();
   });
 
   it("leaves system messages in the honeypot alone", async () => {
