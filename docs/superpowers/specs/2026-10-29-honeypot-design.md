@@ -164,7 +164,7 @@ Then:
   - Use `message.member` from the gateway payload. Fetch only if it's missing.
   - **10007 Unknown Member** means the account already left. Treat it as "everyone else": a ban by user ID still works on a non-member.
   - **Any other lookup error** (timeout, 5xx): delete the message and log "couldn't check membership". Never remove the account, because it might be staff.
-- **Re-check the settings before deleting or removing anything** *(review, Rulings 8, 14 and 27)*. Read the guild's honeypot settings fresh from the database, and confirm the honeypot is still armed in this channel: enabled, with the warning stored and older than the post, a `kick` or `ban` action, and no channel conflict. Use that action and the fresh verification role, so a member verified since the cache was filled keeps their account, and refresh the cache with the fresh row. This guards every path that deletes or removes, the delete-only ones included. The dashboard's reload ping is fire-and-forget and can be lost, so the cache alone could keep enforcing a honeypot an admin just turned off, or keep deleting verified members' posts in a channel an admin had turned off. If the fresh row isn't armed, the message is left alone.
+- **Re-check the settings before deleting or removing anything** *(review, Rulings 8, 14 and 27)*. Read the guild's honeypot settings fresh from the database, and confirm the honeypot is still armed in this channel: enabled, with the warning stored and older than the post, a `kick` or `ban` action, and no channel conflict. Use that action and the fresh verification role, so a member verified since the cache was filled keeps their account, and refresh the cache with the fresh row. This guards every path that deletes or removes, the delete-only ones included, except the late-message deletions and the sweep, which only follow a removal that passed. The dashboard's reload ping is fire-and-forget and can be lost, so the cache alone could keep enforcing a honeypot an admin just turned off, or keep deleting verified members' posts in a channel an admin had turned off. If the fresh row isn't armed, the message is left alone.
 - Messages in **threads** under the honeypot channel are not covered. *(my call)*
 
 ### Removing the account
@@ -363,7 +363,7 @@ Kevin runs the push himself, because it's the production database.
 ## Left to the builder
 
 - The split into files and modules, the names, and how the webhook server reaches the warning sync.
-- Exact timings: the record lifetime (~10 minutes), the sweep delay (~15 seconds), the late-message window (~2 minutes) and the in-flight timeout.
+- Exact timings: the record lifetime (~10 minutes), the sweep delay (~15 seconds) and the late-message window (~2 minutes).
 - Log wording beyond what's specified above.
 - Whether to also delete Discord's "DragonBot pinned a message" notice. The mockup kept it.
 
@@ -391,7 +391,7 @@ The build departed from the approved design in these places. The text above was 
 - **Ruling 8, the fresh row:** the re-read must hold a `kick` or `ban` action, and a member's verified status is recomputed from the fresh verification role. The column has no CHECK constraint, and a stale cache must not remove a member who has just been verified.
 - **Ruling 10, an uncertain ban:** an uncertain confirmation keeps the action record for 60 seconds, opens no late-message window and schedules no sweep. A full record could swallow or mislabel a moderator's later ban or kick, and the window would delete the messages of an account that may never have been removed.
 - **Ruling 13, log failures:** each log entry and notice is sent in its own `try`, and a reason is cut to 200 characters. An embed field has a size limit, and a failed entry must never stop the "still banned" notice.
-- **Ruling 14, the re-read guards every path:** the fresh re-read comes before every delete as well as every removal. After a lost reload ping, verified members' posts were still being deleted in a channel an admin had turned off.
+- **Ruling 14, the re-read guards every path:** the fresh re-read comes before every delete as well as every removal, except the late-message deletions and the sweep, which only follow a removal that passed. After a lost reload ping, verified members' posts were still being deleted in a channel an admin had turned off.
 - **Ruling 15, a ban list that can't be read:** kick mode removes nobody and deletes the message. Banning and unbanning could lift a moderator's ban, and banning without the unban would leave the account banned.
 - **Ruling 16, delete failures:** a failed delete gets the title `Honeypot Message (Delete Failed)`, texts that say "Couldn't delete the message", and a last notice. The entry claimed a delete that hadn't happened.
 - **Ruling 17, the shutdown wait covers the whole handling:** the drain waits for the lookup, the re-read and the delete-only paths, not only the removal. Otherwise `destroy()` could land during a re-read and strand a kick.
