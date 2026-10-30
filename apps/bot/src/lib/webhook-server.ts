@@ -12,6 +12,8 @@ interface WebhookServerOptions {
   guildService: GuildService;
   logger: Logger;
   getScheduler: () => SchedulerManager | undefined;
+  /** Called after a successful reload with the server reloaded, or null when all were. Not awaited. */
+  onGuildReload?: (guildId: string | null) => Promise<void>;
 }
 
 /**
@@ -19,7 +21,7 @@ interface WebhookServerOptions {
  * Used to instantly invalidate caches when settings change via the web UI.
  */
 export function startWebhookServer(options: WebhookServerOptions): http.Server {
-  const { port, secret, guildService, logger, getScheduler } = options;
+  const { port, secret, guildService, logger, getScheduler, onGuildReload } = options;
   const log = logger.child({ component: "webhook-server" });
 
   const server = http.createServer(async (req, res) => {
@@ -70,6 +72,11 @@ export function startWebhookServer(options: WebhookServerOptions): http.Server {
         const scheduler = getScheduler();
         if (scheduler) {
           await scheduler.reload();
+        }
+
+        // Not awaited, so a slow honeypot warning sync can't hold up the reply
+        if (onGuildReload) {
+          onGuildReload(guildId || null).catch((err) => log.warn({ err, guildId }, "Honeypot warning sync after reload failed"));
         }
 
         res.writeHead(200, { "Content-Type": "application/json" });

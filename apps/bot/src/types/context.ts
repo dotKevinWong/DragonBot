@@ -20,6 +20,7 @@ import type { XpArchiveRepository } from "../repositories/xp-archive.repository.
 import type { SchedulerManager } from "../lib/scheduler.js";
 import type { BirthdayChecker } from "../lib/birthday-checker.js";
 import type { YouTubeChecker } from "../lib/youtube-checker.js";
+import type { HoneypotWarningSync } from "../lib/honeypot-warning.js";
 
 export interface BotContext {
   db: DrizzleClient;
@@ -46,4 +47,5 @@ export interface BotContext {
   scheduler?: SchedulerManager;
   birthdayChecker?: BirthdayChecker;
   youtubeChecker?: YouTubeChecker;
+  honeypotWarning?: HoneypotWarningSync;
 }

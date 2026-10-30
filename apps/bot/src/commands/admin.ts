@@ -125,6 +125,7 @@ const command: BotCommand = {
         if (ctx.scheduler) {
           await ctx.scheduler.reload();
         }
+        await ctx.honeypotWarning?.syncAll();
         await interaction.editReply({
           embeds: [successEmbed(`Settings and schedules reloaded! ${ctx.scheduler?.activeJobCount ?? 0} active schedule(s).`)],
         });

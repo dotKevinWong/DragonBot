@@ -37,6 +37,7 @@ import { HoneypotService } from "./services/honeypot.service.js";
 import { SchedulerManager } from "./lib/scheduler.js";
 import { BirthdayChecker } from "./lib/birthday-checker.js";
 import { YouTubeChecker } from "./lib/youtube-checker.js";
+import { HoneypotWarningSync } from "./lib/honeypot-warning.js";
 import { startWebhookServer } from "./lib/webhook-server.js";
 import {
   loadCommands,
@@ -153,6 +154,11 @@ async function main() {
     ctx.youtubeChecker = youtubeChecker;
     logger.info("YouTube checker initialized");
 
+    // Honeypot warning sync — runs on startup (below), via the 4-hour sync timer, after dashboard saves, on /admin reload
+    // and when the warning is deleted
+    const honeypotWarning = new HoneypotWarningSync(client, guildService, honeypotService, loggingService, logger);
+    ctx.honeypotWarning = honeypotWarning;
+
     // Start webhook server for instant cache invalidation from web dashboard
     if (config.BOT_WEBHOOK_SECRET) {
       startWebhookServer({
@@ -161,6 +167,7 @@ async function main() {
         guildService,
         logger,
         getScheduler: () => ctx.scheduler,
+        onGuildReload: (guildId) => (guildId ? honeypotWarning.sync(guildId) : honeypotWarning.syncAll()),
       });
     }
 
@@ -170,15 +177,19 @@ async function main() {
       try {
         await xpService.flush();
         await guildService.hydrateAll();
+        await honeypotWarning.syncAll();
         await scheduler.reload();
         await birthdayChecker.check();
         await youtubeChecker.check();
-        logger.info("Periodic sync complete (XP flush + guild settings + schedule reload + birthday check + YouTube check)");
+        logger.info("Periodic sync complete (XP flush + guild settings + honeypot warnings + schedule reload + birthday check + YouTube check)");
       } catch (err) {
         logger.error({ err }, "Periodic sync failed");
       }
     }, FOUR_HOURS_MS);
     if (syncTimer.unref) syncTimer.unref();
+
+    // Last, so a slow sync can't hold back the webhook server or the timer. syncAll never rejects.
+    await honeypotWarning.syncAll();
   });
 
   // 10. Login

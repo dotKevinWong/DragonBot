@@ -23,17 +23,20 @@ function fakeMessage(overrides: Record<string, unknown> = {}): Message {
   } as unknown as Message;
 }
 
-/** The honeypot is the real in-memory service. Only the log sink and the settings read are fakes. */
-function setup(options: { shouldLog?: boolean } = {}) {
+/** The honeypot is the real in-memory service. Only the log sink, the settings read and the warning sync are fakes. */
+function setup(options: { shouldLog?: boolean; warningMessageId?: string } = {}) {
   const honeypot = new HoneypotService();
   const logging = {
     shouldLog: vi.fn().mockResolvedValue(options.shouldLog ?? true),
     sendLogEmbed: vi.fn().mockResolvedValue(undefined),
   };
-  // A server with no stored honeypot warning.
-  const guild = { getSettings: vi.fn().mockResolvedValue({ guildId: "g1", honeypotWarningMessageId: null }) };
-  const ctx = { logger: { warn: vi.fn() }, services: { honeypot, logging, guild } } as unknown as BotContext;
-  return { ctx, honeypot, logging, guild };
+  // A server with no stored honeypot warning, unless the test gives one.
+  const guild = {
+    getSettings: vi.fn().mockResolvedValue({ guildId: "g1", honeypotWarningMessageId: options.warningMessageId ?? null }),
+  };
+  const honeypotWarning = { sync: vi.fn().mockResolvedValue(undefined) };
+  const ctx = { logger: { warn: vi.fn() }, services: { honeypot, logging, guild }, honeypotWarning } as unknown as BotContext;
+  return { ctx, honeypot, logging, guild, honeypotWarning };
 }
 
 /** What a finished honeypot removal leaves behind: a confirmed action record for the account. */
@@ -142,6 +145,36 @@ describe("messageDelete event", () => {
 
     // DragonBot's own warning is authored by the bot, so its skip entry has to be taken before the bot check.
     expect(honeypot.consumeOwnDeletion("m1")).toBe(false);
+    expect(logging.sendLogEmbed).not.toHaveBeenCalled();
+  });
+
+  it("reposts when the stored warning is deleted", async () => {
+    const deletions = [
+      // Still cached: DragonBot wrote it, so this has to be caught before the bot check.
+      fakeMessage({ id: "w1", author: { id: "bot-self", bot: true } }),
+      // Not cached, for example after a restart: Discord only sends the ID.
+      fakeMessage({ id: "w1", author: null, content: null }),
+    ];
+    for (const message of deletions) {
+      const { ctx, logging, honeypotWarning } = setup({ warningMessageId: "w1" });
+
+      await event.execute(message, ctx);
+
+      expect(honeypotWarning.sync).toHaveBeenCalledTimes(1);
+      expect(honeypotWarning.sync).toHaveBeenCalledWith("g1");
+      expect(logging.shouldLog).not.toHaveBeenCalled();
+      expect(logging.sendLogEmbed).not.toHaveBeenCalled();
+    }
+  });
+
+  it("does not log the bot's own warning deletion", async () => {
+    // DragonBot is removing its old warning, whose IDs are still stored until the removal finishes.
+    const { ctx, honeypot, logging, honeypotWarning } = setup({ warningMessageId: "w1" });
+    honeypot.markOwnDeletion("w1");
+
+    await event.execute(fakeMessage({ id: "w1", author: null, content: null }), ctx);
+
+    expect(honeypotWarning.sync).not.toHaveBeenCalled();
     expect(logging.sendLogEmbed).not.toHaveBeenCalled();
   });
 });
