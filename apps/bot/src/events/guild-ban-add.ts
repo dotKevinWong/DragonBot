@@ -1,5 +1,5 @@
 import { EmbedBuilder, type GuildBan } from "discord.js";
-import { isHoneypotReason } from "../services/honeypot.service.js";
+import { isHoneypotKickReason, isHoneypotReason } from "../services/honeypot.service.js";
 import type { BotEvent } from "../types/commands.js";
 import type { BotContext } from "../types/context.js";
 import { resolveBanReason } from "../utils/audit-log.js";
@@ -13,13 +13,17 @@ const event: BotEvent<"guildBanAdd"> = {
     // A honeypot kick bans only to clean up the account's messages, then unbans. To admins it isn't a ban.
     if (hp?.action === "kick") return;
 
+    // A honeypot ban's reason comes from its record, since Discord may not return it with the ban. Any other ban's
+    // reason is read before anything else is awaited: a kick's ban is lifted within a second, and after that its
+    // reason survives only in an audit-log entry a few seconds old.
+    const reason = hp ? hp.reason : await resolveBanReason(ban);
+    // Without a record, the kick tag still marks a honeypot kick, for example one whose record is gone.
+    if (!hp && isHoneypotKickReason(reason)) return;
+
     const log = ctx.logger.child({ event: "guildBanAdd", guildId: ban.guild.id, userId: ban.user.id });
 
     // Mark user as banned
     await ctx.services.user.markBanned(ban.user.id, ban.guild.id);
-
-    // A honeypot ban's reason comes from its record, since Discord may not return it with the ban.
-    const reason = hp ? hp.reason : await resolveBanReason(ban);
 
     // Log ban
     if (await ctx.services.logging.shouldLog(ban.guild.id, "ban")) {

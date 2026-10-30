@@ -57,14 +57,25 @@ export function warningText(action: HoneypotAction): string {
   return `If you send a message in this channel, you will be automatically ${outcome}. There will be no exceptions.`;
 }
 
+/** The tag a honeypot kick's ban reason starts with. */
+const HONEYPOT_KICK_TAG = "[Honeypot kick]";
+
 /** The ban reason. A kick is a ban followed by an unban, so it gets its own tag. */
 export function removalReason(action: HoneypotAction, channelName: string, messageId: string): string {
-  const tag = action === "ban" ? "[Honeypot]" : "[Honeypot kick]";
+  const tag = action === "ban" ? "[Honeypot]" : HONEYPOT_KICK_TAG;
   return `${tag} posted in #${channelName} (msg ${messageId})`;
 }
 
 export function isHoneypotReason(reason: string | null | undefined): boolean {
   return reason?.includes(HONEYPOT_REASON_MARKER) ?? false;
+}
+
+/**
+ * Whether a ban's reason is a honeypot kick's. It must start with the kick tag, because a false match would leave a
+ * moderator's ban unlogged.
+ */
+export function isHoneypotKickReason(reason: string | null | undefined): boolean {
+  return reason?.startsWith(HONEYPOT_KICK_TAG) ?? false;
 }
 
 /** System notices, webhook posts and bot posts never trigger the honeypot. */

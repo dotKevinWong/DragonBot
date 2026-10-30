@@ -1,11 +1,36 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { EmbedBuilder, GuildBan } from "discord.js";
+import {
+  AuditLogEvent,
+  Collection,
+  DiscordAPIError,
+  RESTJSONErrorCodes,
+  type EmbedBuilder,
+  type GuildBan,
+} from "discord.js";
 import event from "../../src/events/guild-ban-add.js";
 import { HoneypotService, RECORD_TTL_MS, type ActionRecord } from "../../src/services/honeypot.service.js";
 import type { BotContext } from "../../src/types/context.js";
 
 const kickRecord: ActionRecord = { action: "kick", reason: "[Honeypot kick] posted in #trap (msg 111)", channelId: "trap" };
 const banRecord: ActionRecord = { action: "ban", reason: "[Honeypot] posted in #trap (msg 111)", channelId: "trap" };
+
+interface FakeAuditEntry {
+  id: string;
+  targetId: string;
+  reason: string | null;
+  createdTimestamp: number;
+}
+
+/** Discord's answer to a ban fetch once the ban has been lifted. */
+const unknownBan = () =>
+  new DiscordAPIError(
+    { code: RESTJSONErrorCodes.UnknownBan, message: "Unknown Ban" },
+    RESTJSONErrorCodes.UnknownBan,
+    404,
+    "GET",
+    "/x",
+    {},
+  );
 
 /** What a honeypot removal leaves behind once its ban call resolves: a confirmed action record for the account. */
 function recordRemoval(honeypot: HoneypotService, record: ActionRecord, userId = "u1") {
@@ -16,13 +41,22 @@ function recordRemoval(honeypot: HoneypotService, record: ActionRecord, userId =
 }
 
 /**
- * u1 has just been banned from g1, and Discord returns the ban with `fetchedReason` (none unless the test gives one).
+ * u1 has just been banned from g1, and Discord returns the ban with `fetchedReason` (none unless the test gives one),
+ * or fails the fetch with `fetchError`. g1's audit log holds `banEntries`.
  * The honeypot is the real in-memory service. The user records, the log sink, ban sync and Discord are fakes.
  */
-function setup(options: { fetchedReason?: string; shouldLog?: boolean } = {}) {
-  const fetchBan = vi.fn(async (_options: unknown) => ({ reason: options.fetchedReason ?? null }));
+function setup(
+  options: { fetchedReason?: string; fetchError?: Error; banEntries?: FakeAuditEntry[]; shouldLog?: boolean } = {},
+) {
+  const fetchBan = vi.fn(async (_options: unknown) => {
+    if (options.fetchError) throw options.fetchError;
+    return { reason: options.fetchedReason ?? null };
+  });
+  const fetchAuditLogs = vi.fn(async (_options: unknown) => ({
+    entries: new Collection((options.banEntries ?? []).map((entry): [string, FakeAuditEntry] => [entry.id, entry])),
+  }));
   const ban = {
-    guild: { id: "g1", bans: { fetch: fetchBan } },
+    guild: { id: "g1", bans: { fetch: fetchBan }, fetchAuditLogs },
     user: { id: "u1", tag: "u1#0001", displayAvatarURL: () => "https://cdn.example/u1.png" },
     client: { name: "fake client" },
   } as unknown as GuildBan;
@@ -37,7 +71,7 @@ function setup(options: { fetchedReason?: string; shouldLog?: boolean } = {}) {
   };
   const logger = { child: vi.fn(() => ({ info: vi.fn(), error: vi.fn() })) };
   const ctx = { logger, services: { honeypot, user, logging, moderation } } as unknown as BotContext;
-  return { ban, fetchBan, honeypot, user, logging, moderation, ctx };
+  return { ban, fetchBan, fetchAuditLogs, honeypot, user, logging, moderation, ctx };
 }
 
 function deferred() {
@@ -84,11 +118,34 @@ describe("guildBanAdd event", () => {
     expect(fetchBan).not.toHaveBeenCalled();
   });
 
+  it("never syncs a honeypot ban even if its reason lost the marker", async () => {
+    // The record alone keeps a honeypot ban out of ban sync. The marker is the backstop for a ban whose record is gone.
+    const { ban, honeypot, logging, moderation, ctx } = setup();
+    recordRemoval(honeypot, { ...banRecord, reason: "banned by the honeypot" });
+
+    await event.execute(ban, ctx);
+
+    expect(logging.sendLogEmbed).toHaveBeenCalledTimes(1);
+    expect(moderation.syncBan).not.toHaveBeenCalled();
+  });
+
+  it("logs a honeypot ban as a ban even if its reason carries the kick tag", async () => {
+    // The record decides. The kick tag only stands in for a kick record that's gone.
+    const { ban, honeypot, user, logging, moderation, ctx } = setup();
+    recordRemoval(honeypot, { ...banRecord, reason: "[Honeypot kick] posted in #trap (msg 111)" });
+
+    await event.execute(ban, ctx);
+
+    expect(user.markBanned).toHaveBeenCalledWith("u1", "g1");
+    expect(logging.sendLogEmbed).toHaveBeenCalledTimes(1);
+    expect(moderation.syncBan).not.toHaveBeenCalled();
+  });
+
   it("does not sync a ban whose reason carries the honeypot marker even without a record", async () => {
-    // For example a honeypot kick's ban whose record is gone. Servers that don't log bans are covered too.
+    // For example a honeypot ban whose record is gone. Servers that don't log bans are covered too.
     for (const shouldLog of [true, false]) {
       const { ban, fetchBan, logging, moderation, ctx } = setup({
-        fetchedReason: "[Honeypot kick] posted in #trap (msg 111)",
+        fetchedReason: "[Honeypot] posted in #trap (msg 111)",
         shouldLog,
       });
 
@@ -99,6 +156,25 @@ describe("guildBanAdd event", () => {
       expect(fetchBan).toHaveBeenCalledTimes(1);
       expect(logging.sendLogEmbed).toHaveBeenCalledTimes(shouldLog ? 1 : 0);
     }
+  });
+
+  it("treats a ban whose reason starts with the kick tag as a honeypot kick even without a record", async () => {
+    // For example a honeypot kick whose record is gone. Its unban has already landed, so Discord no longer has the ban,
+    // and only the audit log still holds the reason.
+    const { ban, fetchBan, fetchAuditLogs, user, logging, moderation, ctx } = setup({
+      fetchError: unknownBan(),
+      banEntries: [
+        { id: "a1", targetId: "u1", reason: "[Honeypot kick] posted in #trap (msg 111)", createdTimestamp: Date.now() - 1000 },
+      ],
+    });
+
+    await event.execute(ban, ctx);
+
+    expect(fetchBan).toHaveBeenCalledTimes(1);
+    expect(fetchAuditLogs).toHaveBeenCalledWith(expect.objectContaining({ type: AuditLogEvent.MemberBanAdd }));
+    expect(user.markBanned).not.toHaveBeenCalled();
+    expect(logging.sendLogEmbed).not.toHaveBeenCalled();
+    expect(moderation.syncBan).not.toHaveBeenCalled();
   });
 
   it("syncs ordinary bans as before", async () => {
@@ -137,5 +213,30 @@ describe("guildBanAdd event", () => {
     expect(logging.sendLogEmbed.mock.calls[0][1].toJSON().fields).toContainEqual(
       expect.objectContaining({ name: "Reason", value: "[Honeypot] posted in #trap (msg 111)" }),
     );
+  });
+
+  it("reads the reason before marking the account banned", async () => {
+    // A kick's ban is lifted within a second, and then its reason lives only in a few-seconds-old audit-log entry,
+    // so a slow database write must not go first.
+    const { ban, fetchBan, user, moderation, ctx } = setup({ fetchedReason: "spam" });
+    const calls: string[] = [];
+    fetchBan.mockImplementationOnce(async () => {
+      calls.push("fetch ban");
+      return { reason: "spam" };
+    });
+    const write = deferred();
+    user.markBanned.mockImplementationOnce(() => {
+      calls.push("markBanned");
+      return write.promise;
+    });
+
+    const handled = event.execute(ban, ctx);
+    await vi.waitFor(() => expect(user.markBanned).toHaveBeenCalled());
+    expect(calls).toEqual(["fetch ban", "markBanned"]);
+    write.resolve();
+    await handled;
+
+    expect(fetchBan).toHaveBeenCalledTimes(1);
+    expect(moderation.syncBan).toHaveBeenCalledTimes(1);
   });
 });

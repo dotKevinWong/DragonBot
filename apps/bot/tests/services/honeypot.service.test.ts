@@ -12,6 +12,7 @@ import {
   WARNING_COLOR,
   WARNING_TITLE,
   decideHoneypot,
+  isHoneypotKickReason,
   isHoneypotReason,
   isRealPost,
   removalReason,
@@ -41,6 +42,11 @@ describe("honeypot rules", () => {
     expect(isHoneypotReason(removalReason("ban", "trap", "111"))).toBe(true);
     expect(isHoneypotReason(UNBAN_REASON)).toBe(true);
     expect(isHoneypotReason(undefined)).toBe(false);
+    // Only a reason that starts with the kick tag is a honeypot kick's. A moderator's ban that mentions it is a ban.
+    expect(isHoneypotKickReason(removalReason("kick", "trap", "111"))).toBe(true);
+    expect(isHoneypotKickReason(removalReason("ban", "trap", "111"))).toBe(false);
+    expect(isHoneypotKickReason(null)).toBe(false);
+    expect(isHoneypotKickReason("spam, like the [Honeypot kick] one")).toBe(false);
   });
 
   it("ignores system, webhook and bot messages", () => {
