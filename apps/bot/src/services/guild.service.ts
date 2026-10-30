@@ -1,5 +1,5 @@
 import type { GuildRepository } from "../repositories/guild.repository.js";
-import type { guilds } from "@dragonbot/db";
+import type { guilds, GuildRow } from "@dragonbot/db";
 import { TTLCache } from "../utils/cache.js";
 
 export class GuildService {
@@ -24,6 +24,17 @@ export class GuildService {
     const settings = await this.repo.findByGuildId(guildId);
     if (settings) {
       this.cache.set(guildId, settings);
+    }
+    return settings;
+  }
+
+  /** Read settings from the DB even when cached (the cache can be stale), and refresh the cache with the result. */
+  async getSettingsFresh(guildId: string): Promise<GuildRow | null> {
+    const settings = await this.repo.findByGuildId(guildId);
+    if (settings) {
+      this.cache.set(guildId, settings);
+    } else {
+      this.cache.invalidate(guildId);
     }
     return settings;
   }
@@ -60,6 +71,15 @@ export class GuildService {
     const result = await this.repo.updateSettings(guildId, { isBanSyncEnabled: false });
     this.cache.invalidate(guildId);
     return result;
+  }
+
+  /** Record where the bot's honeypot warning lives (bot-managed columns), or clear it with null. */
+  async setHoneypotWarning(guildId: string, warning: { channelId: string; messageId: string } | null): Promise<void> {
+    await this.repo.updateSettings(guildId, {
+      honeypotWarningChannelId: warning?.channelId ?? null,
+      honeypotWarningMessageId: warning?.messageId ?? null,
+    });
+    this.cache.invalidate(guildId);
   }
 
   /** Manually invalidate cache for a guild (e.g., after web dashboard changes) */

@@ -10,6 +10,7 @@ import {
   index,
   jsonb,
 } from "drizzle-orm/pg-core";
+import { HONEYPOT_ACTIONS } from "./honeypot";
 
 export const users = pgTable("users", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -80,6 +81,13 @@ export const guilds = pgTable("guilds", {
   // Mod Notes
   modNotesChannelId: varchar("mod_notes_channel_id", { length: 20 }),
 
+  // Honeypot
+  isHoneypotEnabled: boolean("is_honeypot_enabled").notNull().default(false),
+  honeypotChannelId: varchar("honeypot_channel_id", { length: 20 }),
+  honeypotAction: text("honeypot_action", { enum: HONEYPOT_ACTIONS }).notNull().default("kick"),
+  honeypotWarningChannelId: varchar("honeypot_warning_channel_id", { length: 20 }), // bot-managed
+  honeypotWarningMessageId: varchar("honeypot_warning_message_id", { length: 20 }), // bot-managed
+
   // Suggestions
   isSuggestionsEnabled: boolean("is_suggestions_enabled").notNull().default(true),
 
@@ -115,6 +123,8 @@ export const guilds = pgTable("guilds", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),
 });
+
+export type GuildRow = typeof guilds.$inferSelect;
 
 export const verifications = pgTable("verifications", {
   id: uuid("id").primaryKey().defaultRandom(),

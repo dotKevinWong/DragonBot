@@ -48,6 +48,9 @@ export const FIELD_SCOPE_MAP: Record<string, PermissionScope> = {
   // Moderation
   isBanSyncEnabled: "moderation",
   modNotesChannelId: "moderation",
+  isHoneypotEnabled: "moderation",
+  honeypotChannelId: "moderation",
+  honeypotAction: "moderation",
   // Welcome
   welcomeChannelId: "welcome",
   welcomeMessage: "welcome",
