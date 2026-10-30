@@ -401,6 +401,17 @@ describe("HoneypotService", () => {
     expect(drained).toBe(true);
   });
 
+  it("marks the service as closing when the drain starts", async () => {
+    expect(svc.isClosing).toBe(false);
+    svc.track(new Promise<void>((resolve) => setTimeout(resolve, 1000)));
+    let drained = false;
+    void svc.drain(5000).then(() => { drained = true; });
+    expect(svc.isClosing).toBe(true);                                // before the drain waits, so a message arriving meanwhile sees it
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(drained).toBe(true);
+    expect(svc.isClosing).toBe(true);                                // the mark never clears
+  });
+
   it("drain finishes without waiting out the timeout when tracked work fails", async () => {
     let fail!: (err: Error) => void;
     const failing = svc.track(new Promise<never>((_, reject) => { fail = reject; }));

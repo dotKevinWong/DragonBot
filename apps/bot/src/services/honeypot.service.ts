@@ -138,6 +138,13 @@ export class HoneypotService {
   private ownDeletions = new TTLCache<true>(OWN_DELETION_TTL_SECONDS);
   private exclusiveChains = new Map<string, Promise<void>>();
   private trackedWork = new Set<Promise<unknown>>();
+  /** Set when the shutdown drain begins, and never cleared. */
+  private closing = false;
+
+  /** True once the shutdown drain has begun. It never goes back to false. */
+  get isClosing(): boolean {
+    return this.closing;
+  }
 
   /**
    * A message is part of the account's current case while an action is in flight, or when it was
@@ -298,8 +305,13 @@ export class HoneypotService {
     return work;
   }
 
-  /** Waits for tracked work, including work tracked while draining, for at most timeoutMs. */
+  /**
+   * Marks the service as closing, then waits for tracked work, including work tracked while draining, for at most
+   * timeoutMs.
+   */
   async drain(timeoutMs: number): Promise<void> {
+    // Before any waiting, so a message that arrives while the drain waits sees it.
+    this.closing = true;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timedOut = new Promise<"timed_out">((resolve) => {
       timer = setTimeout(() => resolve("timed_out"), timeoutMs);

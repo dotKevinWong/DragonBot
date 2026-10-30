@@ -842,6 +842,122 @@ describe("handleHoneypotMessage", () => {
     await expect(handled).resolves.toBe("handled");
   });
 
+  it("starts no kick once shutdown has begun", async () => {
+    const posts = [
+      {
+        deleteError: undefined,
+        title: "Message Deleted (Honeypot)",
+        text: "Message deleted only. DragonBot was shutting down, so nobody was removed.",
+        deleteNotices: [] as string[],
+      },
+      // The delete fails: the texts say so, and the delete notice follows as usual.
+      {
+        deleteError: missingPermissions(),
+        title: "Honeypot Message (Delete Failed)",
+        text: "Couldn't delete the message. DragonBot was shutting down, so nobody was removed.",
+        deleteNotices: ["Couldn't delete the message: Missing Permissions. Delete it by hand if it's still there."],
+      },
+    ];
+    for (const { deleteError, title, text, deleteNotices } of posts) {
+      for (const logsDeletes of [true, false]) {
+        const { guild, honeypot, logging, run } = setup({ row: { honeypotAction: "kick" } });
+        logging.shouldLog.mockResolvedValue(logsDeletes);
+        const endCase = vi.spyOn(honeypot, "endCase");
+        const drain = honeypot.drain(5_000);
+        const message = fakeMessage(guild, { deleteError });
+
+        await expect(run(message)).resolves.toBe("handled");
+
+        // The drain's cap or destroy() could cut a kick off between its ban and its unban, so none starts.
+        expect(guild.bans.fetch).not.toHaveBeenCalled();
+        expect(guild.members.ban).not.toHaveBeenCalled();
+        expect(guild.bans.remove).not.toHaveBeenCalled();
+        expect(honeypot.wasRecentlyActioned("g1", "u1")).toBe(false);
+        expect(message.delete).toHaveBeenCalledTimes(1);
+        expect(honeypot.consumeOwnDeletion("111")).toBe(true);
+        expect(logEntries(logging).map((entry) => entry.title)).toEqual(logsDeletes ? [title] : []);
+        expect(loggedActions(logging)).toEqual(logsDeletes ? [text] : []);
+        // The notice goes out whatever the log toggles: the account is still in the server.
+        expect(notices(logging)).toEqual(
+          [text, ...deleteNotices].map((notice) => `<@u1> (u1) posted in the honeypot <#trap>. ${notice}`),
+        );
+        // The case ended straight away, before the delete, so the account's next post is a new case.
+        expect(endCase).toHaveBeenCalledTimes(1);
+        expect(endCase.mock.invocationCallOrder[0]).toBeLessThan(message.delete.mock.invocationCallOrder[0]);
+        expect(honeypot.beginCase("g1", "u1", Date.now() + 1)).toMatchObject({ kind: "start" });
+        await drain;
+      }
+    }
+  });
+
+  it("still bans in ban mode once shutdown has begun", async () => {
+    // A ban cut short by shutdown strands nobody. The cached row may still say kick: the fresh row's action decides.
+    for (const cachedAction of ["ban", "kick"] as const) {
+      const { guild, honeypot, logging, run } = setup({ row: { honeypotAction: cachedAction }, fresh: { honeypotAction: "ban" } });
+      const drain = honeypot.drain(5_000);
+
+      await expect(run(fakeMessage(guild))).resolves.toBe("handled");
+
+      expect(guild.members.ban).toHaveBeenCalledWith("u1", {
+        deleteMessageSeconds: 3600,
+        reason: "[Honeypot] posted in #trap (msg 111)",
+      });
+      expect(guild.members.ban).toHaveBeenCalledTimes(1);
+      expect(guild.bans.remove).not.toHaveBeenCalled();
+      expect(honeypot.takeBanEvent("g1", "u1")).toMatchObject({ action: "ban" });
+      expect(loggedActions(logging)).toEqual(["Banned. Their messages from the last hour were cleaned up."]);
+      expect(logging.sendNotice).not.toHaveBeenCalled();
+      await drain;
+    }
+  });
+
+  it("finishes a kick that began before shutdown, and deletes its same-case messages as usual", async () => {
+    const { guild, ctx, row, honeypot, logging } = setup({ row: { honeypotAction: "kick" } });
+    // The ban waits behind rate limits for two seconds, so the case is still running when shutdown begins.
+    guild.members.ban.mockImplementation(() => new Promise((resolve) => setTimeout(() => resolve("u1"), 2_000)));
+    const trigger = fakeMessage(guild, { id: "111" });
+    const handled = handleHoneypotMessage(asMessage(trigger), row, ctx);
+    await vi.waitFor(() => expect(guild.members.ban).toHaveBeenCalledTimes(1));
+
+    let drained = false;
+    const drain = honeypot.drain(5_000).then(() => {
+      drained = true;
+    });
+    // Another post from the account, part of the running case.
+    const follower = fakeMessage(guild, { id: "112" });
+    await expect(handleHoneypotMessage(asMessage(follower), row, ctx)).resolves.toBe("handled");
+    expect(follower.delete).toHaveBeenCalledTimes(1);
+    expect(drained).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(2_000);
+    await expect(handled).resolves.toBe("handled");
+    await drain;
+
+    // The case that began before the drain ends with its ban and its unban, and the follower adds no entry or notice.
+    expect(guild.members.ban).toHaveBeenCalledTimes(1);
+    expect(guild.bans.remove).toHaveBeenCalledTimes(1);
+    expect(loggedActions(logging)).toEqual(["Kicked. Their messages from the last hour were cleaned up."]);
+    expect(logging.sendNotice).not.toHaveBeenCalled();
+  });
+
+  it("calls getSettingsFresh once per message", async () => {
+    // An ordinary member, a verified member, and an author whose lookup fails, before shutdown and during it.
+    for (const shuttingDown of [false, true]) {
+      for (const member of [fakeMember(), fakeMember({ roleIds: ["verified-role"] }), null]) {
+        const { guild, honeypot, logging, guildService, run } = setup({ row: { honeypotAction: "kick" } });
+        guild.members.fetch.mockRejectedValue(serverError(503));
+        if (shuttingDown) void honeypot.drain(5_000);
+
+        await expect(run(fakeMessage(guild, { member }))).resolves.toBe("handled");
+
+        expect(guildService.getSettingsFresh).toHaveBeenCalledTimes(1);
+        expect(guildService.getSettingsFresh).toHaveBeenCalledWith("g1");
+        // Each one reached its log entry on that one read.
+        expect(logging.sendLogEmbed).toHaveBeenCalledTimes(1);
+      }
+    }
+  });
+
   it("logs only when deleted messages are logged, but always sends notices", async () => {
     const { guild, logging, run } = setup({ row: { honeypotAction: "ban" } });
     logging.shouldLog.mockResolvedValue(false);

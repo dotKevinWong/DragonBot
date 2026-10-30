@@ -35,8 +35,8 @@ const BULK_DELETE_LIMIT = 100;
 /** A failure reason is cut to this length before it goes into a log entry or a notice. */
 const MAX_REASON_LENGTH = 200;
 
-/** Why a honeypot message is deleted without removing anyone. */
-type DeleteOnlyWhy = Extract<HoneypotDecision, { type: "delete_only" }>["why"];
+/** Why a honeypot message is deleted without removing anyone: the decision, or a kick held back at shutdown. */
+type DeleteOnlyWhy = Extract<HoneypotDecision, { type: "delete_only" }>["why"] | "shutting_down";
 
 /** The author of a honeypot message, as far as Discord could tell. */
 type Author = { kind: "member"; member: GuildMember } | { kind: "left" } | { kind: "lookup_failed"; err: unknown };
@@ -108,8 +108,9 @@ function memberStatus(author: Author, verificationRoleId: string | null): Member
 
 /**
  * Enforces the honeypot on a message, before the intro gate and XP. Staff are left alone, verified members only lose
- * the message, and anyone else is kicked or banned with their last hour of messages cleaned up. "handled" means the
- * message is the honeypot's, so it gets no further processing and earns no XP.
+ * the message, and anyone else is kicked or banned with their last hour of messages cleaned up. Once shutdown has
+ * begun, a new kick-mode case only deletes the message. "handled" means the message is the honeypot's, so it gets no
+ * further processing and earns no XP.
  */
 export async function handleHoneypotMessage(
   message: Message<true>,
@@ -117,15 +118,20 @@ export async function handleHoneypotMessage(
   ctx: BotContext,
 ): Promise<"not_honeypot" | "handled"> {
   if (!isArmedIn(settings, message.channelId)) return "not_honeypot";
+  const honeypot = ctx.services.honeypot;
+  // Noted as the tracked work begins, which is when the message arrived. A message that arrived before the drain
+  // began is handled in full, even if the drain begins while it waits for its settings re-read.
+  const closingOnArrival = honeypot.isClosing;
   // Shutdown waits for all of this, not only the removal. Otherwise the drain could resolve during the settings
   // re-read, and destroy() could then land between a kick's ban and its unban, or cut off a delete-only log entry.
-  return ctx.services.honeypot.track(handleArmedMessage(message, settings, ctx));
+  return honeypot.track(handleArmedMessage(message, settings, closingOnArrival, ctx));
 }
 
 /** The rest of handleHoneypotMessage, once the cached row says the honeypot is armed in the message's channel. */
 async function handleArmedMessage(
   message: Message<true>,
   settings: GuildRow,
+  closingOnArrival: boolean,
   ctx: BotContext,
 ): Promise<"not_honeypot" | "handled"> {
   // System notices (a join notice's author is the new member), webhook posts and bot posts are left alone.
@@ -159,6 +165,16 @@ async function handleArmedMessage(
     // Part of a case that's already being handled: no second removal and no second log entry. A failed delete gets
     // no notice either: no log entry claims it, and a burst would flood the log channel.
     await deleteHoneypotMessage(message, ctx);
+    return "handled";
+  }
+  if (closingOnArrival && fresh.honeypotAction === "kick") {
+    // The gateway stays open while the drain waits, so a wave keeps posting. The drain's cap or destroy() could cut a
+    // new kick off between its ban and its unban, leaving the account banned, so none starts. A ban strands nobody.
+    honeypot.endCase(message.guildId, message.author.id, started.caseId);
+    // At warn: with no log channel, this is the only trace of a spammer left in the server.
+    const fields = { guildId: message.guildId, userId: message.author.id };
+    ctx.logger.warn(fields, "Started no honeypot kick during shutdown");
+    await deleteOnly(message, "shutting_down", ctx);
     return "handled";
   }
   await honeypot.track(runRemovalCase(message, fresh.honeypotAction, decision.memberLeft, started.caseId, ctx));
@@ -211,8 +227,9 @@ export async function sweepCachedMessages(guild: Guild, userId: string, sinceMs:
 }
 
 /**
- * Deletes and logs the message without removing anyone. A failed member lookup also gets a notice. When the delete
- * fails, the texts say so, and a last notice asks a moderator to delete the message by hand.
+ * Deletes and logs the message without removing anyone. A failed member lookup and a kick held back at shutdown also
+ * get a notice. When the delete fails, the texts say so, and a last notice asks a moderator to delete the message by
+ * hand.
  */
 async function deleteOnly(
   message: Message<true>,
@@ -227,12 +244,15 @@ async function deleteOnly(
   }
   const deleteFailure = await deleteHoneypotMessage(message, ctx);
   const deleted = deleteFailure === null;
-  await sendLogEntry(message, deleteOnlyText(why, deleted), deleted, ctx);
+  const text = deleteOnlyText(why, deleted);
+  await sendLogEntry(message, text, deleted, ctx);
   if (why === "lookup_failed") {
     const reason = cutReason(describeError(lookupError));
     const notice = `${messageFate(deleted)} Couldn't check membership (${reason}), so nobody was removed.`;
     await sendHoneypotNotice(message, notice, ctx);
   }
+  // The same text as the entry: the account is still in the server.
+  if (why === "shutting_down") await sendHoneypotNotice(message, text, ctx);
   if (deleteFailure !== null) await sendHoneypotNotice(message, deleteFailedText(deleteFailure), ctx);
 }
 
@@ -423,10 +443,16 @@ function outcomeText(outcome: Outcome, deleted: boolean): string {
 
 /** The Honeypot Action field for a message deleted without removing anyone. It never claims a delete that failed. */
 function deleteOnlyText(why: DeleteOnlyWhy, deleted: boolean): string {
-  if (why === "lookup_failed") return `${messageFate(deleted)} Couldn't check membership, so nobody was removed.`;
-  return deleted
-    ? "Message deleted only (verified member)."
-    : "Couldn't delete the message. Nobody was removed (verified member).";
+  switch (why) {
+    case "verified":
+      return deleted
+        ? "Message deleted only (verified member)."
+        : "Couldn't delete the message. Nobody was removed (verified member).";
+    case "lookup_failed":
+      return `${messageFate(deleted)} Couldn't check membership, so nobody was removed.`;
+    case "shutting_down":
+      return `${messageFate(deleted)} DragonBot was shutting down, so nobody was removed.`;
+  }
 }
 
 /** What became of the honeypot message, in the texts that mention it. */
