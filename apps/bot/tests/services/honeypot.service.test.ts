@@ -62,7 +62,7 @@ describe("honeypot rules", () => {
     expect(CLEANUP_SECONDS).toBe(3600);
     expect(RECORD_TTL_MS).toBe(600_000);
     expect(LATE_MESSAGE_WINDOW_MS).toBe(120_000);
-    expect(IN_FLIGHT_TIMEOUT_MS).toBe(120_000);
+    expect(IN_FLIGHT_TIMEOUT_MS).toBe(900_000);
     expect(SWEEP_DELAY_MS).toBe(15_000);
   });
 });
@@ -79,31 +79,83 @@ describe("HoneypotService", () => {
     vi.useRealTimers();
   });
 
+  /** The ID of a case that beginCase started. */
+  function caseIdOf(started: ReturnType<HoneypotService["beginCase"]>): number {
+    if (started.kind !== "start") throw new Error("expected a new case");
+    return started.caseId;
+  }
+
+  /** Starts a case for "g"/"u" with a message sent now, and returns its ID. */
+  function startCase(): number {
+    return caseIdOf(svc.beginCase("g", "u", Date.now()));
+  }
+
   it("groups messages into one case until the action ends, then by timestamp", () => {
-    expect(svc.beginCase("g", "u", 1000)).toBe("start");
-    expect(svc.beginCase("g", "u", 1001)).toBe("same_case");      // in flight
-    vi.setSystemTime(5000); svc.endCase("g", "u");
-    expect(svc.beginCase("g", "u", 4999)).toBe("same_case");      // sent before the action finished
-    expect(svc.beginCase("g", "u", 6000)).toBe("start");          // rejoined and posted again
-    expect(svc.beginCase("g2", "u", 6000)).toBe("start");         // other server is independent
+    const first = svc.beginCase("g", "u", 1000);
+    expect(first.kind).toBe("start");
+    expect(svc.beginCase("g", "u", 1001).kind).toBe("same_case");      // in flight
+    vi.setSystemTime(5000); svc.endCase("g", "u", caseIdOf(first));
+    expect(svc.beginCase("g", "u", 4999).kind).toBe("same_case");      // sent before the action finished
+    expect(svc.beginCase("g", "u", 6000).kind).toBe("start");          // rejoined and posted again
+    expect(svc.beginCase("g2", "u", 6000).kind).toBe("start");         // other server is independent
   });
 
   it("treats a stuck in-flight case as over after the in-flight timeout", () => {
-    expect(svc.beginCase("g", "u", Date.now())).toBe("start");
+    expect(svc.beginCase("g", "u", Date.now()).kind).toBe("start");
     vi.advanceTimersByTime(IN_FLIGHT_TIMEOUT_MS - 1);
-    expect(svc.beginCase("g", "u", Date.now())).toBe("same_case");
+    expect(svc.beginCase("g", "u", Date.now()).kind).toBe("same_case");
     vi.advanceTimersByTime(2);
-    expect(svc.beginCase("g", "u", Date.now())).toBe("start");
+    expect(svc.beginCase("g", "u", Date.now()).kind).toBe("start");
+  });
+
+  it("ignores calls from a case that timed out", () => {
+    const first = startCase();
+    expect(svc.recordAction("g", "u", first, rec)).toBe(true);
+    vi.advanceTimersByTime(IN_FLIGHT_TIMEOUT_MS + 1);                    // the first case's ban is still queued
+    const second = startCase();
+    const rec2 = { ...rec, reason: "[Honeypot kick] posted in #trap (msg 222)" };
+    expect(svc.recordAction("g", "u", second, rec2)).toBe(true);
+    expect(svc.recordAction("g", "u", first, rec)).toBe(false);
+    svc.confirmAction("g", "u", second);
+    vi.advanceTimersByTime(60_000);
+    svc.dropAction("g", "u", first);                                     // the first case's late calls
+    svc.confirmAction("g", "u", first);
+    svc.endCase("g", "u", first);
+    expect(svc.isWithinLateWindow("g", "u")).toBe(true);
+    expect(svc.beginCase("g", "u", Date.now()).kind).toBe("same_case"); // the second case is still in flight
+    expect(svc.takeBanEvent("g", "u")).toEqual(rec2);
+    vi.advanceTimersByTime(LATE_MESSAGE_WINDOW_MS - 60_000 + 1);
+    expect(svc.isWithinLateWindow("g", "u")).toBe(false);                // still timed from the second case's confirm
+  });
+
+  it("returns false from recordAction once the case has timed out", () => {
+    const id = startCase();
+    vi.advanceTimersByTime(IN_FLIGHT_TIMEOUT_MS + 1);                    // the message delete or the ban check hung
+    expect(svc.recordAction("g", "u", id, rec)).toBe(false);
+    expect(svc.wasRecentlyActioned("g", "u")).toBe(false);
   });
 
   it("keeps a record alive until the ban resolves, then for RECORD_TTL_MS", () => {
-    svc.recordAction("g", "u", rec); vi.advanceTimersByTime(RECORD_TTL_MS * 3);   // still pending
-    svc.confirmAction("g", "u"); vi.advanceTimersByTime(RECORD_TTL_MS - 1);
+    const id = startCase();
+    svc.recordAction("g", "u", id, rec); vi.advanceTimersByTime(IN_FLIGHT_TIMEOUT_MS - 1);   // still pending
+    svc.confirmAction("g", "u", id); vi.advanceTimersByTime(RECORD_TTL_MS - 1);
     expect(svc.takeBanEvent("g", "u")).toEqual(rec);
   });
 
+  it("expires a record that is never confirmed when its case times out", () => {
+    const id = startCase();
+    vi.advanceTimersByTime(60_000);                                      // the message delete and the ban check took a minute
+    svc.recordAction("g", "u", id, rec);
+    vi.advanceTimersByTime(IN_FLIGHT_TIMEOUT_MS - 60_000 - 1);
+    expect(svc.wasRecentlyActioned("g", "u")).toBe(true);
+    vi.advanceTimersByTime(2);                                           // IN_FLIGHT_TIMEOUT_MS + 1 after beginCase; no confirm or drop came
+    expect(svc.wasRecentlyActioned("g", "u")).toBe(false);
+    expect(svc.takeBanEvent("g", "u")).toBeNull();
+  });
+
   it("expires a confirmed record after RECORD_TTL_MS", () => {
-    svc.recordAction("g", "u", rec); svc.confirmAction("g", "u");
+    const id = startCase();
+    svc.recordAction("g", "u", id, rec); svc.confirmAction("g", "u", id);
     vi.advanceTimersByTime(RECORD_TTL_MS + 1);
     expect(svc.takeBanEvent("g", "u")).toBeNull();
     expect(svc.takeRemoveEvent("g", "u")).toBeNull();
@@ -111,47 +163,68 @@ describe("HoneypotService", () => {
   });
 
   it("matches each event type at most once per record", () => {
-    svc.recordAction("g", "u", rec); svc.confirmAction("g", "u");
+    const id = startCase();
+    svc.recordAction("g", "u", id, rec); svc.confirmAction("g", "u", id);
+    expect(svc.takeBanEvent("g", "u")).toEqual(rec); expect(svc.takeBanEvent("g", "u")).toBeNull();
+    expect(svc.takeRemoveEvent("g", "u")).toEqual(rec); expect(svc.takeRemoveEvent("g", "u")).toBeNull();
+  });
+
+  it("matches ban and remove events to a record that is still pending", () => {
+    const id = startCase();
+    svc.recordAction("g", "u", id, rec);                                 // the gateway events can beat the ban call's response
     expect(svc.takeBanEvent("g", "u")).toEqual(rec); expect(svc.takeBanEvent("g", "u")).toBeNull();
     expect(svc.takeRemoveEvent("g", "u")).toEqual(rec); expect(svc.takeRemoveEvent("g", "u")).toBeNull();
   });
 
   it("drops a record when the ban fails", () => {
-    svc.recordAction("g", "u", rec);
-    svc.dropAction("g", "u");
+    const id = startCase();
+    svc.recordAction("g", "u", id, rec);
+    svc.dropAction("g", "u", id);
     expect(svc.takeBanEvent("g", "u")).toBeNull();
     expect(svc.takeRemoveEvent("g", "u")).toBeNull();
     expect(svc.wasRecentlyActioned("g", "u")).toBe(false);
   });
 
   it("reports recent action from recordAction until RECORD_TTL_MS after confirm, and the late window for 2 minutes", () => {
-    svc.recordAction("g", "u", rec); expect(svc.wasRecentlyActioned("g", "u")).toBe(true);
+    const id = startCase();
+    svc.recordAction("g", "u", id, rec); expect(svc.wasRecentlyActioned("g", "u")).toBe(true);
     expect(svc.isWithinLateWindow("g", "u")).toBe(false);          // not confirmed yet
-    svc.confirmAction("g", "u"); expect(svc.isWithinLateWindow("g", "u")).toBe(true);
+    svc.confirmAction("g", "u", id); expect(svc.isWithinLateWindow("g", "u")).toBe(true);
     vi.advanceTimersByTime(LATE_MESSAGE_WINDOW_MS + 1); expect(svc.isWithinLateWindow("g", "u")).toBe(false);
     expect(svc.wasRecentlyActioned("g", "u")).toBe(true);
   });
 
+  it("opens no late window when confirmAction finds no record", () => {
+    const id = startCase();
+    svc.confirmAction("g", "u", id);
+    expect(svc.isWithinLateWindow("g", "u")).toBe(false);
+  });
+
   it("keeps the recent-action and late windows after both events are taken", () => {
-    svc.recordAction("g", "u", rec); svc.confirmAction("g", "u");
+    const id = startCase();
+    svc.recordAction("g", "u", id, rec); svc.confirmAction("g", "u", id);
     expect(svc.takeBanEvent("g", "u")).toEqual(rec); expect(svc.takeRemoveEvent("g", "u")).toEqual(rec);
     expect(svc.wasRecentlyActioned("g", "u")).toBe(true);
     expect(svc.isWithinLateWindow("g", "u")).toBe(true);
   });
 
   it("replaces the record when the same account is actioned again", () => {
-    svc.recordAction("g", "u", rec); svc.confirmAction("g", "u");
+    const first = startCase();
+    svc.recordAction("g", "u", first, rec); svc.confirmAction("g", "u", first);
     svc.takeBanEvent("g", "u"); svc.takeRemoveEvent("g", "u");
+    svc.endCase("g", "u", first);
     const rec2 = { ...rec, reason: "[Honeypot kick] posted in #trap (msg 222)" };
-    svc.recordAction("g", "u", rec2); svc.confirmAction("g", "u");
+    const second = startCase();
+    svc.recordAction("g", "u", second, rec2); svc.confirmAction("g", "u", second);
     expect(svc.takeBanEvent("g", "u")).toEqual(rec2);
     expect(svc.takeRemoveEvent("g", "u")).toEqual(rec2);
   });
 
   it("never matches a remove event to an action on an account that had already left", () => {
-    svc.recordAction("g", "u", rec, { memberLeft: true });
+    const id = startCase();
+    svc.recordAction("g", "u", id, rec, { memberLeft: true });
     expect(svc.takeRemoveEvent("g", "u")).toBeNull();               // the departure before the ban, if its event comes in late
-    svc.confirmAction("g", "u");
+    svc.confirmAction("g", "u", id);
     expect(svc.takeBanEvent("g", "u")).toEqual(rec);                // a ban by ID sends only the ban event
     vi.advanceTimersByTime(9 * 60_000);                             // rejoined, then left or was kicked again
     expect(svc.takeRemoveEvent("g", "u")).toBeNull();
@@ -159,22 +232,29 @@ describe("HoneypotService", () => {
   });
 
   it("matches the remove event again when the rejoined account is actioned as a member", () => {
-    svc.recordAction("g", "u", rec, { memberLeft: true }); svc.confirmAction("g", "u");
+    const first = startCase();
+    svc.recordAction("g", "u", first, rec, { memberLeft: true }); svc.confirmAction("g", "u", first);
     svc.takeBanEvent("g", "u");
+    svc.endCase("g", "u", first);
     const rec2 = { ...rec, reason: "[Honeypot kick] posted in #trap (msg 222)" };
-    svc.recordAction("g", "u", rec2, { memberLeft: false }); svc.confirmAction("g", "u");   // rejoined and posted again
+    const second = startCase();                                                                       // rejoined and posted again
+    svc.recordAction("g", "u", second, rec2, { memberLeft: false }); svc.confirmAction("g", "u", second);
     expect(svc.takeBanEvent("g", "u")).toEqual(rec2);
     expect(svc.takeRemoveEvent("g", "u")).toEqual(rec2);
   });
 
-  it("keeps the late window running while a new case is pending, until dropAction", () => {
-    svc.recordAction("g", "u", rec); svc.confirmAction("g", "u");
+  it("keeps the late window running while a new case is pending, even when the new ban fails", () => {
+    const first = startCase();
+    svc.recordAction("g", "u", first, rec); svc.confirmAction("g", "u", first); svc.endCase("g", "u", first);
     vi.advanceTimersByTime(30_000);
-    svc.recordAction("g", "u", { ...rec, reason: "[Honeypot kick] posted in #trap (msg 222)" }); // rejoined and posted again
+    const second = startCase();                                                                       // rejoined and posted again
+    svc.recordAction("g", "u", second, { ...rec, reason: "[Honeypot kick] posted in #trap (msg 222)" });
     expect(svc.isWithinLateWindow("g", "u")).toBe(true);
-    svc.dropAction("g", "u");                                                                    // the new ban failed
-    expect(svc.isWithinLateWindow("g", "u")).toBe(false);
+    svc.dropAction("g", "u", second);                                                                 // the new ban failed
+    expect(svc.isWithinLateWindow("g", "u")).toBe(true);                                              // the first case opened it
     expect(svc.wasRecentlyActioned("g", "u")).toBe(false);
+    vi.advanceTimersByTime(LATE_MESSAGE_WINDOW_MS - 30_000 + 1);
+    expect(svc.isWithinLateWindow("g", "u")).toBe(false);
   });
 
   it("consumes own deletions once", () => {
@@ -222,6 +302,20 @@ describe("HoneypotService", () => {
     await expect(svc.runExclusive("g", async () => "idle again")).resolves.toBe("idle again");
   });
 
+  it("leaves no chain entry behind once runExclusive work settles", async () => {
+    vi.useRealTimers();                                              // so the setImmediate below is a real macrotask
+    const chains = (svc as unknown as { exclusiveChains: Map<string, unknown> }).exclusiveChains;
+    const succeeded = svc.runExclusive("g", async () => "ok");
+    const failed = svc.runExclusive("g", async () => { throw new Error("boom"); });
+    const otherKey = svc.runExclusive("h", async () => "other");
+    expect(chains.size).toBe(2);                                     // one chain per key while work is queued
+    await expect(succeeded).resolves.toBe("ok");
+    await expect(failed).rejects.toThrow("boom");
+    await expect(otherKey).resolves.toBe("other");
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(chains.size).toBe(0);
+  });
+
   it("drain waits for tracked work but not past the timeout", async () => {
     const work = svc.track(new Promise<string>((resolve) => setTimeout(() => resolve("done"), 1000)));
     let drained = false;
@@ -261,5 +355,23 @@ describe("HoneypotService", () => {
     fail(new Error("ban failed"));
     await failingChecked;
     await expect(drained).resolves.toBeUndefined();               // no timers advanced, so the work settling ended it
+  });
+
+  it("doesn't raise an unhandled rejection when a tracked promise rejects unobserved", async () => {
+    vi.useRealTimers();                                              // so the setImmediate below is a real macrotask
+    const unhandled = vi.fn();
+    process.on("unhandledRejection", unhandled);
+    try {
+      let fail!: (err: Error) => void;
+      const work = new Promise<never>((_, reject) => { fail = reject; });
+      svc.track(work);                                               // registered for the drain; the result is ignored
+      const handled = work.catch((err: Error) => err.message);       // the caller handles its own handle
+      fail(new Error("ban failed"));
+      await expect(handled).resolves.toBe("ban failed");
+      await new Promise((resolve) => setImmediate(resolve));         // Node reports unhandled rejections before this runs
+      expect(unhandled).not.toHaveBeenCalled();
+    } finally {
+      process.off("unhandledRejection", unhandled);
+    }
   });
 });
