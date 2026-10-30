@@ -15,6 +15,7 @@ import type { ScheduledMessageService } from "../services/scheduled-message.serv
 import type { XpService } from "../services/xp.service.js";
 import type { BirthdayService } from "../services/birthday.service.js";
 import type { YouTubeService } from "../services/youtube.service.js";
+import type { HoneypotService } from "../services/honeypot.service.js";
 import type { XpArchiveRepository } from "../repositories/xp-archive.repository.js";
 import type { SchedulerManager } from "../lib/scheduler.js";
 import type { BirthdayChecker } from "../lib/birthday-checker.js";
@@ -39,6 +40,7 @@ export interface BotContext {
     xp: XpService;
     birthday: BirthdayService;
     youtube: YouTubeService;
+    honeypot: HoneypotService;
   };
   xpArchiveRepo?: XpArchiveRepository;
   scheduler?: SchedulerManager;

@@ -33,6 +33,7 @@ import { XpArchiveRepository } from "./repositories/xp-archive.repository.js";
 import { BirthdayService } from "./services/birthday.service.js";
 import { YouTubeRepository } from "./repositories/youtube.repository.js";
 import { YouTubeService } from "./services/youtube.service.js";
+import { HoneypotService } from "./services/honeypot.service.js";
 import { SchedulerManager } from "./lib/scheduler.js";
 import { BirthdayChecker } from "./lib/birthday-checker.js";
 import { YouTubeChecker } from "./lib/youtube-checker.js";
@@ -84,6 +85,7 @@ async function main() {
   const birthdayService = new BirthdayService(birthdayRepo);
   const youtubeRepo = new YouTubeRepository(db);
   const youtubeService = new YouTubeService();
+  const honeypotService = new HoneypotService();
   const xpArchiveRepo = new XpArchiveRepository(db);
 
   // 6. Context
@@ -106,6 +108,7 @@ async function main() {
       xp: xpService,
       birthday: birthdayService,
       youtube: youtubeService,
+      honeypot: honeypotService,
     },
     xpArchiveRepo,
   };
