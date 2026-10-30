@@ -148,6 +148,25 @@ describe("HoneypotService", () => {
     expect(svc.takeRemoveEvent("g", "u")).toEqual(rec2);
   });
 
+  it("never matches a remove event to an action on an account that had already left", () => {
+    svc.recordAction("g", "u", rec, { memberLeft: true });
+    expect(svc.takeRemoveEvent("g", "u")).toBeNull();               // the departure before the ban, if its event comes in late
+    svc.confirmAction("g", "u");
+    expect(svc.takeBanEvent("g", "u")).toEqual(rec);                // a ban by ID sends only the ban event
+    vi.advanceTimersByTime(9 * 60_000);                             // rejoined, then left or was kicked again
+    expect(svc.takeRemoveEvent("g", "u")).toBeNull();
+    expect(svc.wasRecentlyActioned("g", "u")).toBe(true);
+  });
+
+  it("matches the remove event again when the rejoined account is actioned as a member", () => {
+    svc.recordAction("g", "u", rec, { memberLeft: true }); svc.confirmAction("g", "u");
+    svc.takeBanEvent("g", "u");
+    const rec2 = { ...rec, reason: "[Honeypot kick] posted in #trap (msg 222)" };
+    svc.recordAction("g", "u", rec2, { memberLeft: false }); svc.confirmAction("g", "u");   // rejoined and posted again
+    expect(svc.takeBanEvent("g", "u")).toEqual(rec2);
+    expect(svc.takeRemoveEvent("g", "u")).toEqual(rec2);
+  });
+
   it("keeps the late window running while a new case is pending, until dropAction", () => {
     svc.recordAction("g", "u", rec); svc.confirmAction("g", "u");
     vi.advanceTimersByTime(30_000);

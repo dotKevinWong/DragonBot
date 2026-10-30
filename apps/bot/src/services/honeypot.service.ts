@@ -86,6 +86,7 @@ interface RecordEntry {
   /** Infinity until the ban call resolves, then RECORD_TTL_MS after that. */
   expiresAt: number;
   banEventTaken: boolean;
+  /** Starts true when the account had already left, because banning a non-member sends no remove event. */
   removeEventTaken: boolean;
 }
 
@@ -133,14 +134,18 @@ export class HoneypotService {
     this.caseEndTimes.set(key, now);
   }
 
-  /** Call before the ban goes out. Replaces any earlier record for the account, and never expires before confirmAction. */
-  recordAction(guildId: string, userId: string, record: ActionRecord): void {
+  /**
+   * Call before the ban goes out. Replaces any earlier record for the account, and never expires before confirmAction.
+   * Pass memberLeft when the account had already left. Its ban then sends no member-remove event, so takeRemoveEvent
+   * never matches this record, and the account's later departures are handled normally.
+   */
+  recordAction(guildId: string, userId: string, record: ActionRecord, options: { memberLeft?: boolean } = {}): void {
     this.sweep(Date.now());
     this.actionRecords.set(accountKey(guildId, userId), {
       record,
       expiresAt: Infinity,
       banEventTaken: false,
-      removeEventTaken: false,
+      removeEventTaken: options.memberLeft ?? false,
     });
   }
 
@@ -171,7 +176,7 @@ export class HoneypotService {
     return entry.record;
   }
 
-  /** Matches a member-remove event to the account's action record, at most once per record. */
+  /** Matches a member-remove event to the account's action record, at most once per record, and never when the account had already left. */
   takeRemoveEvent(guildId: string, userId: string): ActionRecord | null {
     const entry = this.liveRecord(guildId, userId);
     if (!entry || entry.removeEventTaken) return null;
