@@ -167,7 +167,9 @@ async function main() {
         guildService,
         logger,
         getScheduler: () => ctx.scheduler,
-        onGuildReload: (guildId) => (guildId ? honeypotWarning.sync(guildId) : honeypotWarning.syncAll()),
+        // A dashboard save for one server resets that server's repost budget, so an admin can retry its warning.
+        onGuildReload: (guildId) =>
+          guildId ? honeypotWarning.sync(guildId, { resetBudget: true }) : honeypotWarning.syncAll(),
       });
     }
 
