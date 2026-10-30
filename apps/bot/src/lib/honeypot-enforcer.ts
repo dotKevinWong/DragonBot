@@ -145,7 +145,8 @@ export async function handleHoneypotMessage(
   const honeypot = ctx.services.honeypot;
   const started = honeypot.beginCase(message.guildId, message.author.id, message.createdTimestamp);
   if (started.kind === "same_case") {
-    // Part of a case that's already being handled: no second removal and no second log entry.
+    // Part of a case that's already being handled: no second removal and no second log entry. A failed delete gets
+    // no notice either: no log entry claims it, and a burst would flood the log channel.
     await deleteHoneypotMessage(message, ctx);
     return "handled";
   }
@@ -198,16 +199,20 @@ export async function sweepCachedMessages(guild: Guild, userId: string, sinceMs:
   return deleted;
 }
 
-/** Deletes and logs the message without removing anyone, with a notice when given one. */
+/**
+ * Deletes and logs the message without removing anyone, with a notice when given one. When the delete fails, a
+ * further notice asks a moderator to delete it by hand.
+ */
 async function deleteOnly(message: Message<true>, actionText: string, ctx: BotContext, notice?: string): Promise<void> {
-  await deleteHoneypotMessage(message, ctx);
+  const deleteFailure = await deleteHoneypotMessage(message, ctx);
   await sendLogEntry(message, actionText, ctx);
   if (notice) await sendHoneypotNotice(message, notice, ctx);
+  if (deleteFailure !== null) await sendHoneypotNotice(message, deleteFailedText(deleteFailure), ctx);
 }
 
 /**
  * One removal case: delete the message, remove the account, then log it. It runs inside honeypot.track, so shutdown
- * waits for it, log entry and notice included. Never rejects.
+ * waits for it, log entry and notices included. Never rejects.
  */
 async function runRemovalCase(
   message: Message<true>,
@@ -217,8 +222,9 @@ async function runRemovalCase(
   ctx: BotContext,
 ): Promise<void> {
   let outcome: Outcome;
+  let deleteFailure: string | null;
   try {
-    await deleteHoneypotMessage(message, ctx);
+    deleteFailure = await deleteHoneypotMessage(message, ctx);
     outcome = await removeAuthor(message, action, memberLeft, caseId, ctx);
   } finally {
     // As soon as the removal ends, so a slow log send can't hold the case open: a kicked account that rejoins and
@@ -232,6 +238,9 @@ async function runRemovalCase(
   if (outcome.kind === "failed" || outcome.kind === "unconfirmed" || outcome.kind === "still_banned") {
     await sendHoneypotNotice(message, text, ctx);
   }
+  // Sent even after a ban, whose cleanup usually takes the message: Discord's cleanup can miss the newest message, and
+  // the leftover sweep fails the same way when DragonBot can't delete there.
+  if (deleteFailure !== null) await sendHoneypotNotice(message, deleteFailedText(deleteFailure), ctx);
 }
 
 /**
@@ -343,17 +352,21 @@ function scheduleSweep(guild: Guild, userId: string, logger: Logger): void {
   }, SWEEP_DELAY_MS).unref();
 }
 
-/** Deletes a honeypot message, marked first as DragonBot's own deletion so the delete log skips it. Never throws. */
-async function deleteHoneypotMessage(message: Message<true>, ctx: BotContext): Promise<void> {
+/**
+ * Deletes a honeypot message, marked first as DragonBot's own deletion so the delete log skips it. Never throws.
+ * Returns why the delete failed, or null when the message is gone.
+ */
+async function deleteHoneypotMessage(message: Message<true>, ctx: BotContext): Promise<string | null> {
   ctx.services.honeypot.markOwnDeletion(message.id);
   try {
     await message.delete();
   } catch (err) {
     // Unknown Message: already gone, for example deleted by the ban's cleanup.
-    if (!hasErrorCode(err, RESTJSONErrorCodes.UnknownMessage)) {
-      ctx.logger.warn({ err, guildId: message.guildId, messageId: message.id }, "Couldn't delete a honeypot message");
-    }
+    if (hasErrorCode(err, RESTJSONErrorCodes.UnknownMessage)) return null;
+    ctx.logger.warn({ err, guildId: message.guildId, messageId: message.id }, "Couldn't delete a honeypot message");
+    return describeError(err);
   }
+  return null;
 }
 
 /** The Honeypot Action field of the log entry, which notices repeat. */
@@ -374,6 +387,11 @@ function outcomeText(outcome: Outcome): string {
     case "still_banned":
       return `Kicked, but the unban failed: ${cutReason(outcome.reason)}. They are still banned and need a manual unban.`;
   }
+}
+
+/** The notice for a honeypot message DragonBot couldn't delete. */
+function deleteFailedText(reason: string): string {
+  return `Couldn't delete the message: ${cutReason(reason)}. Delete it by hand if it's still there.`;
 }
 
 /** The deleted-message log entry, sent only when the server logs deleted messages. Never throws. */

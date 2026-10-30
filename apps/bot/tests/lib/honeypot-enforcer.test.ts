@@ -34,6 +34,9 @@ const unknownMember = () => apiError(RESTJSONErrorCodes.UnknownMember, "Unknown 
 const unknownBan = () => apiError(RESTJSONErrorCodes.UnknownBan, "Unknown Ban", 404);
 const unknownMessage = () => apiError(RESTJSONErrorCodes.UnknownMessage, "Unknown Message", 404);
 const missingPermissions = () => apiError(RESTJSONErrorCodes.MissingPermissions, "Missing Permissions", 403);
+/** Discord's answer when the server requires 2FA for moderation and its owner has none. */
+const twoFactorRequired = () =>
+  apiError(RESTJSONErrorCodes.TwoFactorAuthenticationIsRequired, "Two factor is required for this operation", 403);
 /** What discord.js throws once a 5xx outlasts its retries. */
 const serverError = (status: 500 | 503) =>
   new HTTPError(status, status === 500 ? "Internal Server Error" : "Service Unavailable", "PUT", "/x", {});
@@ -728,7 +731,7 @@ describe("handleHoneypotMessage", () => {
   });
 
   it("marks the trigger as its own deletion and treats Unknown Message on delete as fine", async () => {
-    const { guild, honeypot, logger, run } = setup({ row: { honeypotAction: "ban" } });
+    const { guild, honeypot, logging, logger, run } = setup({ row: { honeypotAction: "ban" } });
     const markOwnDeletion = vi.spyOn(honeypot, "markOwnDeletion");
     // The ban's cleanup can delete the trigger first.
     const message = fakeMessage(guild, { deleteError: unknownMessage() });
@@ -741,6 +744,136 @@ describe("handleHoneypotMessage", () => {
     expect(honeypot.consumeOwnDeletion("111")).toBe(true);
     expect(guild.members.ban).toHaveBeenCalledTimes(1);
     expect(logger.warn).not.toHaveBeenCalled();
+    // The message is gone, so there's nothing to report.
+    expect(logging.sendNotice).not.toHaveBeenCalled();
+  });
+
+  it("reports a message it couldn't delete, whatever the log toggles", async () => {
+    const posts = [
+      // A verified member's post, where the delete is the honeypot's only protection. The server requires 2FA for
+      // moderation and its owner has none, so Discord refuses the delete.
+      {
+        member: fakeMember({ roleIds: ["verified-role"] }),
+        deleteError: twoFactorRequired(),
+        bans: 0,
+        logged: "Message deleted only (verified member).",
+        notice: "Couldn't delete the message: Two factor is required for this operation. Delete it by hand if it's still there.",
+      },
+      // An ordinary member's post, where a channel overwrite takes away Manage Messages but the ban still works.
+      {
+        member: fakeMember(),
+        deleteError: missingPermissions(),
+        bans: 1,
+        logged: "Banned. Their messages from the last hour were cleaned up.",
+        notice: "Couldn't delete the message: Missing Permissions. Delete it by hand if it's still there.",
+      },
+    ];
+    for (const { member, deleteError, bans, logged, notice } of posts) {
+      for (const logsDeletes of [true, false]) {
+        const { guild, logging, run } = setup({ row: { honeypotAction: "ban" } });
+        logging.shouldLog.mockResolvedValue(logsDeletes);
+        const message = fakeMessage(guild, { member, deleteError });
+
+        await expect(run(message)).resolves.toBe("handled");
+
+        expect(message.delete).toHaveBeenCalledTimes(1);
+        expect(guild.members.ban).toHaveBeenCalledTimes(bans);
+        // The log entry keeps its fixed text, so the notice is what tells a moderator the message may still be up.
+        expect(loggedActions(logging)).toEqual(logsDeletes ? [logged] : []);
+        expect(notices(logging)).toEqual([`<@u1> (u1) posted in the honeypot <#trap>. ${notice}`]);
+      }
+    }
+  });
+
+  it("reports a trigger it couldn't delete after the case's own notice", async () => {
+    const cases: {
+      prepare: (guild: FakeGuild) => void;
+      member?: FakeMember | null;
+      action: "kick" | "ban";
+      /** The Honeypot Action field, which keeps the brief's fixed text. */
+      logged: string;
+      /** Notices the case sends before the delete failure notice. */
+      caseNotices: number;
+    }[] = [
+      // Membership unknown, so nobody is removed.
+      {
+        prepare: (guild) => guild.members.fetch.mockRejectedValue(serverError(503)),
+        member: null,
+        action: "ban",
+        logged: "Message deleted only. Couldn't check membership, so nobody was removed.",
+        caseNotices: 1,
+      },
+      // The ban is refused.
+      {
+        prepare: (guild) => guild.members.ban.mockRejectedValue(missingPermissions()),
+        action: "ban",
+        logged: "Removal failed: Missing Permissions. Message deleted only.",
+        caseNotices: 1,
+      },
+      // Already banned, so neither a ban nor its cleanup follows.
+      {
+        prepare: (guild) => guild.bans.fetch.mockResolvedValue({ user: { id: "u1" } }),
+        action: "kick",
+        logged: "Already banned. Message deleted only.",
+        caseNotices: 0,
+      },
+      // Kicked: the ban's cleanup usually takes the message, but it can miss the newest one.
+      {
+        prepare: () => {},
+        action: "kick",
+        logged: "Kicked. Their messages from the last hour were cleaned up.",
+        caseNotices: 0,
+      },
+    ];
+    for (const { prepare, member, action, logged, caseNotices } of cases) {
+      const { guild, logging, run } = setup({ row: { honeypotAction: action } });
+      prepare(guild);
+      const message = fakeMessage(guild, { member, deleteError: missingPermissions() });
+
+      await expect(run(message)).resolves.toBe("handled");
+
+      expect(loggedActions(logging)).toEqual([logged]);
+      const sent = notices(logging);
+      expect(sent).toHaveLength(caseNotices + 1);
+      expect(sent.at(-1)).toBe(
+        "<@u1> (u1) posted in the honeypot <#trap>. Couldn't delete the message: Missing Permissions. " +
+          "Delete it by hand if it's still there.",
+      );
+    }
+  });
+
+  it("cuts a long delete failure reason to 200 characters", async () => {
+    const { guild, logging, run } = setup();
+    const message = fakeMessage(guild, {
+      member: fakeMember({ roleIds: ["verified-role"] }),
+      deleteError: apiError(RESTJSONErrorCodes.MissingPermissions, "x".repeat(2_000), 403),
+    });
+
+    await expect(run(message)).resolves.toBe("handled");
+
+    expect(notices(logging)).toEqual([
+      `<@u1> (u1) posted in the honeypot <#trap>. Couldn't delete the message: ${"x".repeat(200)}. Delete it by hand if it's still there.`,
+    ]);
+  });
+
+  it("keeps the shutdown drain waiting for the delete failure notice", async () => {
+    const { guild, honeypot, logging, run } = setup({ row: { honeypotAction: "kick" } });
+    const slowNotice = deferred();
+    logging.sendNotice.mockReturnValueOnce(slowNotice.promise);
+
+    const handled = run(fakeMessage(guild, { deleteError: missingPermissions() }));
+    await vi.waitFor(() => expect(logging.sendNotice).toHaveBeenCalledTimes(1));
+    let drained = false;
+    const drain = honeypot.drain(5_000).then(() => {
+      drained = true;
+    });
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(drained).toBe(false);
+    slowNotice.resolve();
+    await drain;
+    expect(drained).toBe(true);
+    await expect(handled).resolves.toBe("handled");
   });
 
   it("schedules the sweep 15 seconds after a removal", async () => {
