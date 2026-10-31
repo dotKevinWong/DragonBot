@@ -10,6 +10,8 @@ const event: BotEvent<"guildCreate"> = {
     log.info({ guildName: guild.name }, "Joined new guild");
 
     await ctx.services.guild.ensureGuild(guild.id, guild.name);
+    // The honeypot warning may have been deleted while DragonBot was away.
+    void ctx.honeypotWarning?.sync(guild.id);
   },
 };
 

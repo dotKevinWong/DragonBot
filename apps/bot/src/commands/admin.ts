@@ -107,6 +107,7 @@ const command: BotCommand = {
         `**Intro Gate:** ${settings.isIntroGateEnabled ? "Enabled" : "Disabled"} ${settings.introChannelId ? `in <#${settings.introChannelId}>` : ""}`,
         `**Intro Role:** ${settings.introRoleId ? `<@&${settings.introRoleId}>` : "Not set"}`,
         `**Mod Notes:** ${settings.modNotesChannelId ? `<#${settings.modNotesChannelId}>` : "Not set"}`,
+        `**Honeypot:** ${settings.isHoneypotEnabled ? "Enabled" : "Disabled"} ${settings.honeypotChannelId ? `in <#${settings.honeypotChannelId}>` : ""} (${settings.honeypotAction === "ban" ? "Ban" : "Kick"}, warning ${settings.honeypotWarningChannelId === settings.honeypotChannelId && settings.honeypotWarningMessageId ? "posted" : "not posted"})`,
         `**Suggestions:** ${settings.isSuggestionsEnabled ? "Enabled" : "Disabled"}`,
         `**AI Ask:** ${settings.isAskEnabled ? "Enabled" : "Disabled"}`,
         `**XP:** ${settings.isXpEnabled ? "Enabled" : "Disabled"} (${settings.xpMin}–${settings.xpMax} XP, ${settings.xpCooldownSeconds}s cooldown)`,
@@ -125,6 +126,7 @@ const command: BotCommand = {
         if (ctx.scheduler) {
           await ctx.scheduler.reload();
         }
+        await ctx.honeypotWarning?.sync(guildId, { resetBudget: true });
         await interaction.editReply({
           embeds: [successEmbed(`Settings and schedules reloaded! ${ctx.scheduler?.activeJobCount ?? 0} active schedule(s).`)],
         });

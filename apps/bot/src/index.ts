@@ -33,9 +33,11 @@ import { XpArchiveRepository } from "./repositories/xp-archive.repository.js";
 import { BirthdayService } from "./services/birthday.service.js";
 import { YouTubeRepository } from "./repositories/youtube.repository.js";
 import { YouTubeService } from "./services/youtube.service.js";
+import { HoneypotService } from "./services/honeypot.service.js";
 import { SchedulerManager } from "./lib/scheduler.js";
 import { BirthdayChecker } from "./lib/birthday-checker.js";
 import { YouTubeChecker } from "./lib/youtube-checker.js";
+import { HoneypotWarningSync } from "./lib/honeypot-warning.js";
 import { startWebhookServer } from "./lib/webhook-server.js";
 import {
   loadCommands,
@@ -84,6 +86,7 @@ async function main() {
   const birthdayService = new BirthdayService(birthdayRepo);
   const youtubeRepo = new YouTubeRepository(db);
   const youtubeService = new YouTubeService();
+  const honeypotService = new HoneypotService();
   const xpArchiveRepo = new XpArchiveRepository(db);
 
   // 6. Context
@@ -106,6 +109,7 @@ async function main() {
       xp: xpService,
       birthday: birthdayService,
       youtube: youtubeService,
+      honeypot: honeypotService,
     },
     xpArchiveRepo,
   };
@@ -151,6 +155,11 @@ async function main() {
     ctx.youtubeChecker = youtubeChecker;
     logger.info("YouTube checker initialized");
 
+    // Honeypot warning sync — runs on startup (below), via the 4-hour sync timer, after dashboard saves, on /admin reload
+    // and when the warning is deleted
+    const honeypotWarning = new HoneypotWarningSync(client, guildService, honeypotService, loggingService, logger);
+    ctx.honeypotWarning = honeypotWarning;
+
     // Start webhook server for instant cache invalidation from web dashboard
     if (config.BOT_WEBHOOK_SECRET) {
       startWebhookServer({
@@ -159,6 +168,9 @@ async function main() {
         guildService,
         logger,
         getScheduler: () => ctx.scheduler,
+        // A dashboard save for one server resets that server's repost budget, so an admin can retry its warning.
+        onGuildReload: (guildId) =>
+          guildId ? honeypotWarning.sync(guildId, { resetBudget: true }) : honeypotWarning.syncAll(),
       });
     }
 
@@ -175,8 +187,22 @@ async function main() {
       } catch (err) {
         logger.error({ err }, "Periodic sync failed");
       }
+      // After the birthday check: it lists servers from the settings cache, and this sync's writes drop entries from it.
+      // Caught on its own, so a failed earlier step doesn't skip it.
+      try {
+        await honeypotWarning.syncAll();
+      } catch (err) {
+        logger.error({ err }, "Periodic honeypot warning sync failed");
+      }
     }, FOUR_HOURS_MS);
     if (syncTimer.unref) syncTimer.unref();
+
+    // Last, so a slow sync can't hold back the webhook server or the timer. Caught here too, so it can't crash the bot.
+    try {
+      await honeypotWarning.syncAll();
+    } catch (err) {
+      logger.error({ err }, "Startup honeypot warning sync failed");
+    }
   });
 
   // 10. Login
@@ -196,7 +222,10 @@ async function main() {
     }, 8000);
 
     try {
-      // Disconnect from Discord first to stop receiving new events
+      // Let in-flight honeypot actions finish: destroy() clears the REST token, which would strand a kick between
+      // its ban and its unban
+      await honeypotService.drain(5_000);
+      // Disconnect from Discord to stop receiving new events
       client.destroy();
       // Flush XP to database
       await xpService.flush();

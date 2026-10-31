@@ -15,10 +15,12 @@ import type { ScheduledMessageService } from "../services/scheduled-message.serv
 import type { XpService } from "../services/xp.service.js";
 import type { BirthdayService } from "../services/birthday.service.js";
 import type { YouTubeService } from "../services/youtube.service.js";
+import type { HoneypotService } from "../services/honeypot.service.js";
 import type { XpArchiveRepository } from "../repositories/xp-archive.repository.js";
 import type { SchedulerManager } from "../lib/scheduler.js";
 import type { BirthdayChecker } from "../lib/birthday-checker.js";
 import type { YouTubeChecker } from "../lib/youtube-checker.js";
+import type { HoneypotWarningSync } from "../lib/honeypot-warning.js";
 
 export interface BotContext {
   db: DrizzleClient;
@@ -39,9 +41,11 @@ export interface BotContext {
     xp: XpService;
     birthday: BirthdayService;
     youtube: YouTubeService;
+    honeypot: HoneypotService;
   };
   xpArchiveRepo?: XpArchiveRepository;
   scheduler?: SchedulerManager;
   birthdayChecker?: BirthdayChecker;
   youtubeChecker?: YouTubeChecker;
+  honeypotWarning?: HoneypotWarningSync;
 }

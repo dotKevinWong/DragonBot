@@ -1,4 +1,5 @@
 import { EmbedBuilder, type Message } from "discord.js";
+import { deleteLateMessage, handleHoneypotMessage } from "../lib/honeypot-enforcer.js";
 import type { BotEvent } from "../types/commands.js";
 import type { BotContext } from "../types/context.js";
 import { validateIntroduction } from "../utils/intro-validator.js";
@@ -8,10 +9,15 @@ const event: BotEvent<"messageCreate"> = {
 
   async execute(message: Message, ctx: BotContext) {
     if (message.author.bot) return;
-    if (!message.guild) return;
+    if (!message.inGuild()) return;
 
     const guild = await ctx.services.guild.getSettings(message.guild.id);
     if (!guild) return;
+
+    // Honeypot, before the intro gate and XP: a honeypot message never earns XP
+    if ((await handleHoneypotMessage(message, guild, ctx)) === "handled") return;
+    // Messages from an account the honeypot just removed are deleted on arrival
+    if (await deleteLateMessage(message, ctx)) return;
 
     // Introduction gate
     if (

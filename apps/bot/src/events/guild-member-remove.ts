@@ -7,6 +7,11 @@ const event: BotEvent<"guildMemberRemove"> = {
   name: "guildMemberRemove",
 
   async execute(member: GuildMember | PartialGuildMember, ctx: BotContext) {
+    // The honeypot's record of its own removal. Read before any await, so it can't expire while this handler waits.
+    const hp = ctx.services.honeypot.takeRemoveEvent(member.guild.id, member.id);
+    // A honeypot ban: the honeypot's entry and "Member Banned" already tell the story, so no "Member Left".
+    if (hp?.action === "ban") return;
+
     const guildId = member.guild.id;
     const log = ctx.logger.child({ event: "guildMemberRemove", guildId, userId: member.id });
 
@@ -16,12 +21,20 @@ const event: BotEvent<"guildMemberRemove"> = {
     let executorId: string | null = null;
     let reason: string | null = null;
 
-    const kickLog = await findRecentAuditLogEntry(member.guild, AuditLogEvent.MemberKick, member.id);
-    if (kickLog) {
+    if (hp?.action === "kick") {
+      // DragonBot kicked them with a ban and an unban, so the audit log holds no kick to find.
       action = "kicked";
-      executor = kickLog.executor?.tag ?? "Unknown";
-      executorId = kickLog.executor?.id ?? null;
-      reason = normalizeReason(kickLog.reason);
+      executor = member.client.user.tag;
+      executorId = member.client.user.id;
+      reason = hp.reason;
+    } else {
+      const kickLog = await findRecentAuditLogEntry(member.guild, AuditLogEvent.MemberKick, member.id);
+      if (kickLog) {
+        action = "kicked";
+        executor = kickLog.executor?.tag ?? "Unknown";
+        executorId = kickLog.executor?.id ?? null;
+        reason = normalizeReason(kickLog.reason);
+      }
     }
 
     // Log member_leave

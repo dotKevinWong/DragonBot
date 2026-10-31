@@ -89,11 +89,13 @@ interface BotContext {
     xp: XpService;
     birthday: BirthdayService;
     youtube: YouTubeService;
+    honeypot: HoneypotService;
   };
   xpArchiveRepo?: XpArchiveRepository; // present after startup
   scheduler?: SchedulerManager;        // present after startup, absent during early init
   birthdayChecker?: BirthdayChecker;   // present after startup
   youtubeChecker?: YouTubeChecker;     // present after startup
+  honeypotWarning?: HoneypotWarningSync; // present after startup
 }
 ```
 
@@ -174,6 +176,7 @@ Note: Birthday data (`birth_month`, `birth_day`, `birth_year`) is stored on the 
 |---|---|
 | Verification | `verification_role_id`, `is_verification_sync_enabled` |
 | Ban Sync | `is_ban_sync_enabled` |
+| Honeypot | `is_honeypot_enabled`, `honeypot_channel_id`, `honeypot_action` (`kick` or `ban`), `honeypot_warning_channel_id`, `honeypot_warning_message_id` (the last two are written only by the bot) |
 | Welcome | `welcome_channel_id`, `welcome_message`, `is_welcome_enabled`, `dm_welcome_message`, `is_dm_welcome_enabled` |
 | Logging | `log_channel_id`, `is_logging_enabled`, `log_events` (array of event types) |
 | Intro Gate | `intro_channel_id`, `intro_role_id`, `is_intro_gate_enabled`, `intro_min_chars`, `intro_min_words` |
@@ -189,11 +192,13 @@ When a setting is null or a feature toggle is false, the feature is simply inact
 
 ### Guild Admin Permissions
 
-The `guild_admins` table provides granular permissions for users who don't have Discord's MANAGE_GUILD permission. Available scopes:
+The `guild_admins` table provides granular permissions for users who aren't the server owner and don't have Discord's Administrator or Manage Server permission. Available scopes:
 
 `verification`, `welcome`, `logging`, `intro_gate`, `moderation`, `suggestions`, `ai`, `offtopic`, `xp`, `schedules`, `birthday`, `youtube`, `managers`, `*` (wildcard)
 
-Discord MANAGE_GUILD always grants full access. The `guild_admins` table is additive.
+The server owner and members with Administrator or Manage Server always get full access. The `guild_admins` table is additive.
+
+The honeypot fields (`is_honeypot_enabled`, `honeypot_channel_id`, `honeypot_action`) need full access: the server owner, Administrator, Manage Server or a `guild_admins` row holding `*`. They decide who gets kicked or banned, so the `moderation` scope isn't enough.
 
 ## Environment Variables
 
@@ -233,7 +238,7 @@ All routes validate input with zod. All return `{ error, code }` on failure.
 
 - `POST /api/auth` — token → JWT exchange
 - `GET /api/auth` — verify JWT, return user info + Discord avatar
-- `GET /api/guilds` — list guilds user can manage (checks MANAGE_GUILD + guild_admins)
+- `GET /api/guilds` — list guilds user can manage (checks owner, Administrator or Manage Server, then guild_admins)
 - `GET /api/profile` — current user's profile
 - `PATCH /api/profile` — update profile
 - `GET /api/server/[guildId]` — guild settings
@@ -282,6 +287,21 @@ MEE6-style XP with in-memory caching to minimize DB writes (Neon charges for com
 - **Graceful shutdown:** SIGTERM/SIGINT handlers flush before exit
 - **Archives (backup/restore):** `/xp-admin reset-all` archives current XP state to `xp_archives` (jsonb snapshot) before zeroing. `/xp-admin restore <archive_id>` auto-archives current state first (undo is always possible), then restores. `/xp-admin archives` lists the 10 most recent snapshots.
 - **Public leaderboard:** `/api/leaderboard/[guildId]` serves leaderboard data without auth.
+
+### Honeypot
+
+A per-server trap channel for spam waves: DragonBot keeps a pinned warning in it and removes ordinary accounts that post there. The Honeypot card sets the three settings in the config table (full access only: Manage Server or `*`; the action defaults to `kick`). Only the bot writes `honeypot_warning_channel_id` and `honeypot_warning_message_id`; the `PATCH` never accepts them. A *notice* is a message in the log channel.
+
+- **Who triggers what:** `messageCreate` checks the honeypot channel before the intro gate and XP, so a honeypot post earns no XP. System, webhook and bot messages, threads and the System Messages channel are ignored. **Staff** (Administrator, Manage Server, Kick Members or Ban Members, nothing else) are ignored completely. A **verified** member (has `verification_role_id`; none set means nobody is) only has the message deleted and logged. Everyone else is kicked or banned, with the message and their last hour deleted. A failed member lookup removes nobody (it might be staff); an author who left is still removed by ID.
+- **No warning, no enforcement:** a post is acted on only if the honeypot is enabled with a channel, the stored warning channel equals it, a warning ID is stored and the post is newer than the warning (pinned isn't required). Before it deletes a honeypot post or removes anyone, it re-reads the row from the database, since the cache can be stale (the late-message deletions and the sweep only follow a removal that passed). The bot refuses to arm in the System Messages channel, in a channel another setting uses (`findHoneypotChannelConflict`), or when the channel's resolved ID differs from the stored string: the sync removes any stored warning, clears the IDs and sends a notice.
+- **Kick is a ban plus an unban:** a ban is the only call that cleans up a user's messages server-wide, so both actions ban with `deleteMessageSeconds: 3600`. Ban reasons start with `[Honeypot]` (a kick's with `[Honeypot kick]`). Kick mode checks the ban list first: an already-banned account gets neither ban nor unban (the unban would lift someone else's ban), and an unreadable list removes nobody. A failed unban is retried once, then reported.
+- **The warning:** `HoneypotWarningSync` keeps one embed per server, posted and pinned. `messageDelete` and `messageDeleteBulk` start a sync that takes the deleted warning as gone, without fetching it. Reposts share a budget of `MAX_POSTS_PER_WINDOW` per server per `POST_WINDOW_MS`, across syncs; once spent, nothing is posted, the IDs stay cleared (the honeypot is off) and a notice says so. Only a dashboard save for that server and `/admin reload` reset it.
+- **Warning syncs** run after a dashboard save (one server, or all on a full reload), on startup, every 4 hours, on `/admin reload` (that server only), when DragonBot joins a server and when the warning is deleted. A sync reads the row from the database and adopts a warning already pinned rather than posting a duplicate. Unknown Message and Unknown Channel mean gone (IDs replaced or cleared); other failures, such as Missing Access, mean "can't tell" (IDs kept, a notice).
+- **One case per account, cleanup and shutdown:** in-flight actions are keyed by server and user (`HoneypotService.beginCase`). A further post from the same account while its case runs (or sent before it ended) is deleted but starts no second action or log entry; a case past `IN_FLIGHT_TIMEOUT_MS` counts as over. Discord's ban cleanup can miss the newest message, so a confirmed ban is followed by a sweep of the account's cached messages (`SWEEP_DELAY_MS`) and, for `LATE_MESSAGE_WINDOW_MS`, deletion of its new ones. `HoneypotService.drain` waits up to 5 seconds before `client.destroy()`; a kick-mode post arriving after shutdown begins is only deleted and logged.
+- **Ban sync and the other handlers:** DragonBot records each action in memory before calling Discord (`RECORD_TTL_MS` from when the ban resolves), and `guildBanAdd` and `guildMemberRemove` read it first, before any `await`. Ban sync skips honeypot actions, and any ban whose reason contains `[Honeypot`. A honeypot ban logs "Member Banned" only; a kick logs "Member Kicked" and skips `markBanned` and "Member Banned". With the record gone, `guildBanAdd` still recognises a kick by its `[Honeypot kick]` reason and skips `markBanned`, "Member Banned" and ban sync; that kick's member-remove event then logs "Member Left".
+- **Logging and notices:** notices go out whenever logging is enabled with a log channel, and warning-sync notices repeat at most once per server per distinct text every 24 hours. The generic `messageDelete` handler skips messages DragonBot deleted itself, its own warning and messages from an account with a recent honeypot action.
+- **Dashboard:** the `PATCH` route rejects a channel another setting uses (`findHoneypotChannelConflict`). The card turns the honeypot on only for a text channel in the loaded list. A save sends each honeypot field only when it differs from the last saved settings (all three when it turns the honeypot on), so a tab left open can't turn the honeypot back on, or put back an old action or channel, on an unrelated save.
+- **Permissions and deploy:** `docs/superpowers/specs/2026-10-29-honeypot-design.md` lists the bot permissions (Pin Messages is separate from Manage Messages since 2026-02-23). New `guilds` columns must be pushed before the code that reads them ships, because `select().from(guilds)` names every column.
 
 ### YouTube Notifications
 
@@ -351,7 +371,7 @@ Config files: `railway.json`, `vercel.json`
 ### Authentication & Authorization
 
 - **JWT validation on every authenticated request.** Every API route that reads or writes user/guild data must verify the JWT signature and expiration.
-- **Authorization is not authentication.** After verifying identity via JWT, always check the user has permission for the specific guild/resource (MANAGE_GUILD permission, guild_admins table entry, or resource ownership).
+- **Authorization is not authentication.** After verifying identity via JWT, always check the user has permission for the specific guild/resource (owner, Administrator or Manage Server, guild_admins table entry, or resource ownership).
 - **Auth tokens are single-use.** Delete the `auth_tokens` row immediately after JWT exchange. Never allow reuse.
 - **Sensitive data is ephemeral.** Verification codes, login links, and tokens must only appear in ephemeral Discord replies — never in public channels.
 
@@ -372,6 +392,7 @@ Config files: `railway.json`, `vercel.json`
 - **Permission checks in commands.** Admin/mod commands must verify Discord permissions or guild_admins status in the handler — never rely solely on Discord's built-in command permissions.
 - **AI prompt injection.** The `/ask` endpoint passes user input to OpenAI. System prompts must not contain secrets or internal implementation details. Sanitize or truncate excessively long inputs.
 - **Email domain allowlist.** Verification is restricted to `drexel.edu` and `dragons.drexel.edu` in the service layer. Never add wildcard patterns.
+- **Settings channels stay in their own server.** Fetch a channel named in a server's settings with `fetchGuildTextChannel` (`apps/bot/src/utils/guild-channel.ts`) or `guild.channels.fetch`, never bare `client.channels.fetch`. Settings hold bare channel IDs, and `client.channels.fetch` finds a channel in any server DragonBot is in, so one server's messages could land in another server's channel.
 
 ### Environment & Deployment
 

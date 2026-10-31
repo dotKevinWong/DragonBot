@@ -6,6 +6,7 @@
 
 - ✅ **Email Verification** — Verify Drexel students with `@drexel.edu` emails, synced across servers
 - 👨‍⚖️ **Ban Syncing** — Bans propagate across all servers with ban sync enabled
+- 🍯 **Honeypot Channel** — Spam accounts that post in a trap channel are kicked or banned automatically, with their recent messages cleaned up
 - 😎 **User Profiles** — Students can share their name, major, college, year, co-ops, and more
 - 🤖 **AI Ask** — `/ask` command powered by OpenAI for answering questions
 - 📋 **Suggestions** — Community feature requests with status tracking and web dashboard management
