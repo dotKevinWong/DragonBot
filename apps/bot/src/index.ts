@@ -73,7 +73,7 @@ async function main() {
   const guildService = new GuildService(guildRepo);
   const userService = new UserService(userRepo);
   const verificationService = new VerificationService(verificationRepo, guildRepo, userRepo, email);
-  const authService = new AuthService(authRepo, config.JWT_SECRET);
+  const authService = new AuthService(authRepo);
   const suggestionService = new SuggestionService(suggestionRepo, guildRepo);
   const moderationService = new ModerationService(guildService);
   const loggingService = new LoggingService(guildService);
@@ -142,25 +142,20 @@ async function main() {
     await scheduler.loadAll();
     ctx.scheduler = scheduler;
 
-    // Birthday checker — runs on startup (catch-up) and via 4-hour sync timer
+    // Birthday checker — runs on startup (catch-up, below) and via 4-hour sync timer
     const birthdayChecker = new BirthdayChecker(client, birthdayService, guildService, logger);
-    await birthdayChecker.check();
-    ctx.birthdayChecker = birthdayChecker;
-    logger.info("Birthday checker initialized");
 
-    // YouTube checker — runs on startup and via 4-hour sync timer. Each run announces every
+    // YouTube checker — runs on startup (below) and via 4-hour sync timer. Each run announces every
     // video newer than the last one seen, so restarts and the long interval don't drop uploads.
     const youtubeChecker = new YouTubeChecker(client, youtubeService, youtubeRepo, guildService, logger);
-    await youtubeChecker.check();
-    ctx.youtubeChecker = youtubeChecker;
-    logger.info("YouTube checker initialized");
 
     // Honeypot warning sync — runs on startup (below), via the 4-hour sync timer, after dashboard saves, on /admin reload
     // and when the warning is deleted
     const honeypotWarning = new HoneypotWarningSync(client, guildService, honeypotService, loggingService, logger);
     ctx.honeypotWarning = honeypotWarning;
 
-    // Start webhook server for instant cache invalidation from web dashboard
+    // Start webhook server for instant cache invalidation from web dashboard. Before the slow startup checks below,
+    // so dashboard reload pings sent during them are not refused.
     if (config.BOT_WEBHOOK_SECRET) {
       startWebhookServer({
         port: config.BOT_WEBHOOK_PORT,
@@ -196,6 +191,16 @@ async function main() {
       }
     }, FOUR_HOURS_MS);
     if (syncTimer.unref) syncTimer.unref();
+
+    // Startup birthday catch-up and YouTube check. After the webhook server and the timer, which they can take minutes
+    // to finish.
+    await birthdayChecker.check();
+    ctx.birthdayChecker = birthdayChecker;
+    logger.info("Birthday checker initialized");
+
+    await youtubeChecker.check();
+    ctx.youtubeChecker = youtubeChecker;
+    logger.info("YouTube checker initialized");
 
     // Last, so a slow sync can't hold back the webhook server or the timer. Caught here too, so it can't crash the bot.
     try {

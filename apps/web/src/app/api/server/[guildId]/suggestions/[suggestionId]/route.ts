@@ -30,7 +30,7 @@ export async function PATCH(
     return NextResponse.json({ error: "Not found", code: "NOT_FOUND" }, { status: 404 });
   }
 
-  const hasPermission = await checkGuildPermission(guildId, discordId);
+  const hasPermission = await checkGuildPermission(guildId, discordId, "suggestions");
   if (!hasPermission) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
@@ -72,7 +72,7 @@ export async function DELETE(
     return NextResponse.json({ error: "Not found", code: "NOT_FOUND" }, { status: 404 });
   }
 
-  const hasPermission = await checkGuildPermission(guildId, discordId);
+  const hasPermission = await checkGuildPermission(guildId, discordId, "suggestions");
   if (!hasPermission) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }

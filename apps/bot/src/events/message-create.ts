@@ -76,6 +76,10 @@ const event: BotEvent<"messageCreate"> = {
         } catch (err) {
           ctx.logger.warn({ err, userId: message.author.id }, "Failed to DM user about rejected intro");
         }
+
+        // A rejected intro earns no XP and posts no level-up. This holds even if the delete
+        // failed: the message was still rejected, and the user was told to try again.
+        return;
       }
     }
 

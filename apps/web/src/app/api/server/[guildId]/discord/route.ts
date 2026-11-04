@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { guildAdmins } from "@dragonbot/db";
 import { getAuthenticatedUser } from "@/lib/auth";
 import { checkGuildPermission } from "@/lib/discord";
@@ -46,8 +46,13 @@ export async function GET(
   }
 
   // Check guild_admins table first (no Discord API call), then fall back to Discord permission
-  const adminRows = await db.select().from(guildAdmins).where(eq(guildAdmins.discordId, discordId)).limit(1);
-  const isCustomAdmin = adminRows.some((r) => r.guildId === guildId);
+  // A row with an empty permission list grants nothing, as in checkGuildPermission.
+  const adminRows = await db
+    .select()
+    .from(guildAdmins)
+    .where(and(eq(guildAdmins.guildId, guildId), eq(guildAdmins.discordId, discordId)))
+    .limit(1);
+  const isCustomAdmin = adminRows.some((r) => r.permissions.length > 0);
 
   if (!isCustomAdmin) {
     const hasPermission = await checkGuildPermission(guildId, discordId);

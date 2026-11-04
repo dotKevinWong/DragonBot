@@ -9,6 +9,8 @@ export interface XpEntry {
   xpMessageCount: number;    // messages that earned XP (passed cooldown)
   lastMessageAt: number;     // epoch ms for fast cooldown checks
   dirty: boolean;
+  /** Bumped on every in-place change, so a flush only marks an entry clean if it didn't change while being written. */
+  version: number;
 }
 
 export interface XpProcessResult {
@@ -69,6 +71,7 @@ export class XpService {
         xpMessageCount: row.xpMessageCount,
         lastMessageAt: row.lastMessageAt ? row.lastMessageAt.getTime() : 0,
         dirty: false,
+        version: 0,
       });
     }
     this.isHydrated = true;
@@ -78,24 +81,29 @@ export class XpService {
   /**
    * Process a message for XP. Entirely in-memory — no DB activity.
    * Returns result if XP was granted (including level-up info), or null if on cooldown.
+   * Also returns null, without counting the message, until hydrate() has run: hydrate would overwrite the entry,
+   * and a zeroed entry could post a false level-up.
    */
   processMessage(
     guildId: string,
     discordId: string,
     settings: GuildXpSettings,
   ): XpProcessResult | null {
+    if (!this.isHydrated) return null;
+
     const key = `${guildId}:${discordId}`;
     const now = Date.now();
 
     let entry = this.xpMap.get(key);
     if (!entry) {
-      entry = { totalXp: 0, level: 0, messageCount: 0, xpMessageCount: 0, lastMessageAt: 0, dirty: false };
+      entry = { totalXp: 0, level: 0, messageCount: 0, xpMessageCount: 0, lastMessageAt: 0, dirty: false, version: 0 };
       this.xpMap.set(key, entry);
     }
 
     // Always count the message, regardless of cooldown
     entry.messageCount++;
     entry.dirty = true;
+    entry.version++;
 
     // Cooldown check — only gates XP, not message counting
     const cooldownMs = settings.xpCooldownSeconds * 1000;
@@ -175,6 +183,7 @@ export class XpService {
     entry.xpMessageCount = 0;
     entry.lastMessageAt = 0;
     entry.dirty = true;
+    entry.version++;
     return true;
   }
 
@@ -183,7 +192,7 @@ export class XpService {
     return this.isFlushing;
   }
 
-  /** Batch-upsert all dirty entries to DB, then mark them clean. */
+  /** Batch-upsert all dirty entries to DB, then mark clean each written entry that didn't change during the write. */
   async flush(): Promise<void> {
     if (this.isFlushing) {
       this.logger.warn("Flush already in progress, skipping");
@@ -216,6 +225,8 @@ export class XpService {
     const chunkSize = 500;
     for (let i = 0; i < dirtyEntries.length; i += chunkSize) {
       const chunk = dirtyEntries.slice(i, i + chunkSize);
+      // Read each entry's values and version in the same synchronous step, since earlier chunks' awaits let it change
+      const versions = chunk.map((e) => e.entry.version);
       await this.repo.batchUpsert(
         chunk.map((e) => ({
           guildId: e.guildId,
@@ -227,11 +238,11 @@ export class XpService {
           lastMessageAt: e.entry.lastMessageAt > 0 ? new Date(e.entry.lastMessageAt) : null,
         })),
       );
-    }
 
-    // Mark all as clean
-    for (const { entry } of dirtyEntries) {
-      entry.dirty = false;
+      // Mark this chunk clean, except entries changed while it was being written: they stay dirty for the next flush
+      chunk.forEach(({ entry }, j) => {
+        if (entry.version === versions[j]) entry.dirty = false;
+      });
     }
 
     this.logger.info({ count: dirtyEntries.length }, "XP data flushed to database");
@@ -299,6 +310,7 @@ export class XpService {
         entry.xpMessageCount = 0;
         entry.lastMessageAt = 0;
         entry.dirty = true;
+        entry.version++;
         count++;
       }
     }
@@ -316,6 +328,8 @@ export class XpService {
         xpMessageCount: e.xpMessageCount,
         lastMessageAt: e.lastMessageAt,
         dirty: true,
+        // A new object, so a flush still holding the replaced one can't mark this one clean
+        version: 0,
       });
     }
     return entries.length;

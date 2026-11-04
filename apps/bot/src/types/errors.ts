@@ -15,9 +15,6 @@ export enum ErrorCode {
   PROFILE_NOT_FOUND = "PROFILE_NOT_FOUND",
 
   // Auth
-  TOKEN_EXPIRED = "TOKEN_EXPIRED",
-  TOKEN_USED = "TOKEN_USED",
-  TOKEN_NOT_FOUND = "TOKEN_NOT_FOUND",
   INVALID_JWT = "INVALID_JWT",
 
   // Suggestions

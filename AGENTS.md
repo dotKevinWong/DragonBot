@@ -55,7 +55,7 @@ pnpm-workspace.yaml       Lists apps/*, packages/* and scripts (no scripts/ dire
 
 | File | Role | Depends on |
 |---|---|---|
-| `auth.service.ts` | `generateToken` (32 random bytes hex, 5-min expiry) for `/login`. Also has `exchangeToken`/`signJwt`/`verifyJwt`, unused: the web app does its own | AuthRepository, `JWT_SECRET` |
+| `auth.service.ts` | `generateToken` (32 random bytes hex, 5-min expiry) for `/login`. The web app exchanges the token and signs the JWT | AuthRepository |
 | `birthday.service.ts` | Set/remove/view birthdays, upcoming list, formatting, announcement template (`{user}`, `{age}`) | BirthdayRepository |
 | `guild-admin.service.ts` | `hasPermission` (`*` or scope), `hasAnyPermission`, manager CRUD validated against `PERMISSION_SCOPES`; 24h `TTLCache` | GuildAdminRepository |
 | `guild.service.ts` | Guild settings cache: `hydrateAll`, `getSettings` (cache), `getSettingsFresh` (DB), `ensureGuild`, `updateSettings`, `getAllCached`, `getAllBanSyncGuilds`, `disableBanSync`, `setHoneypotWarning`, `invalidateCache`; 24h `TTLCache` with a write-mark guard so an in-flight read can't re-cache a stale row | GuildRepository |
@@ -66,7 +66,7 @@ pnpm-workspace.yaml       Lists apps/*, packages/* and scripts (no scripts/ dire
 | `suggestion.service.ts` | `create` (checks `is_suggestions_enabled`) | SuggestionRepository, GuildRepository |
 | `user.service.ts` | `getProfile`, `isVerified` (24h cache), `markBanned` | UserRepository |
 | `verification.service.ts` | `initiateVerification`, `confirmVerification`; domain allowlist, 6 hex-char code (`randomBytes(3)`), 30-min expiry, timing-safe compare | VerificationRepository, GuildRepository, UserRepository, EmailService |
-| `xp.service.ts` | In-memory XP engine: `hydrate`, `processMessage`, `getRank`, `getLeaderboard`, snapshot/reset/rehydrate for archives, `flush` (500-row chunks, `isFlushing` guard) | XpRepository, logger, `utils/xp` |
+| `xp.service.ts` | In-memory XP engine: `hydrate`, `processMessage`, `getRank`, `getLeaderboard`, snapshot/reset/rehydrate for archives, `flush` (500-row chunks, `isFlushing` guard; a per-entry `version` keeps entries changed mid-flush dirty). `processMessage` returns null until `hydrate()` finishes | XpRepository, logger, `utils/xp` |
 | `youtube.service.ts` | `fetchRecentVideos` (Atom RSS via fast-xml-parser, 10s timeout), `buildNotificationMessage` | none |
 
 **Repositories** (one per table unless noted): `auth` (auth_tokens), `birthday` (users birth columns), `guild-admin` (guild_admins), `guild` (guilds), `scheduled-message` (scheduled_messages), `suggestion` (suggestions), `user` (users), `verification` (verifications), `xp` (user_xp, `batchUpsert` uses `sql\`excluded.*\``), `xp-archive` (xp_archives, no service), `youtube` (youtube_subscriptions joined to guilds, no service).
@@ -294,7 +294,7 @@ Settings come from the GuildService cache (`getSettings`), except the honeypot p
 2. `createBotClient(DATABASE_URL)`; `EmailService`, `AIService`; repositories; services; `BotContext`.
 3. `createClient()`; `loadCommands` → `registerCommands` (global REST PUT) → `loadEvents` → `bindInteractionHandler`.
 4. `client.login()`, then SIGTERM/SIGINT/crash handlers are registered.
-5. `clientReady` (once), in order: `guildService.hydrateAll()` → `xpService.hydrate()` → `SchedulerManager.loadAll()` (→ `ctx.scheduler`) → `BirthdayChecker.check()` → `YouTubeChecker.check()` → create `HoneypotWarningSync` → start the webhook server **only if `BOT_WEBHOOK_SECRET` is set** → start the 4-hour timer → `honeypotWarning.syncAll()` (last, in its own try/catch).
+5. `clientReady` (once), in order: `guildService.hydrateAll()` → `xpService.hydrate()` → `SchedulerManager.loadAll()` (→ `ctx.scheduler`) → create `BirthdayChecker`, `YouTubeChecker` and `HoneypotWarningSync` → start the webhook server **only if `BOT_WEBHOOK_SECRET` is set** → start the 4-hour timer → `birthdayChecker.check()` → `youtubeChecker.check()` → `honeypotWarning.syncAll()` (last, in its own try/catch). The webhook server and timer start before the slow checks so dashboard reloads work during startup.
 
 A rejection elsewhere in `clientReady` reaches the `unhandledRejection` handler, which flushes XP and exits 1.
 
@@ -382,7 +382,8 @@ The honeypot fields (`is_honeypot_enabled`, `honeypot_channel_id`, `honeypot_act
 | Surface | Check |
 |---|---|
 | Web `PATCH /api/server/[guildId]` | `getUserGuildPermissions` → each field's scope from `FIELD_SCOPE_MAP` (`*` passes all). Fields absent from the map need no scope |
-| Web schedules, suggestions, YouTube, Discord-data and `GET /api/server/[guildId]` routes | `checkGuildPermission(guildId, userId)` with **no scope**: any `guild_admins` row with at least one scope passes. The `schedules`, `suggestions` and `youtube` scopes are not checked there |
+| Web schedules, suggestions and YouTube **writes** (POST, PATCH, DELETE, `youtube/resolve`) | `checkGuildPermission(guildId, userId, scope)` with `schedules`, `suggestions` or `youtube` |
+| Web GET routes (settings, schedules, suggestions, YouTube, Discord data) | `checkGuildPermission(guildId, userId)` with **no scope**: any `guild_admins` row with at least one scope can read |
 | Web `GET /api/server/[guildId]/leaderboard` | Guild membership only (`isGuildMember`) |
 | Bot `/admin` | `managers` scope for managers-*, any scope for view-settings/reload |
 | Bot `/xp-admin` | `xp` scope (Administrator for reset-all/restore) |
@@ -404,7 +405,6 @@ RESEND_FROM_EMAIL=        # Sender address for verification emails (email)
 OPENAI_API_KEY=           # OpenAI key
 OPENAI_MODEL=gpt-5-mini   # Default model
 WEBAPP_URL=               # e.g. https://app.drexeldiscord.com (URL; used in /login, /help, /admin, /schedule, /leaderboard)
-JWT_SECRET=               # Min 32 chars; passed to AuthService (unused for signing in the bot)
 BOT_WEBHOOK_SECRET=       # Optional, min 16 chars; webhook server starts only when set
 BOT_WEBHOOK_PORT=3001     # 1-65535, default 3001 (leave unset rather than blank)
 ```
@@ -453,15 +453,15 @@ All `[guildId]` path params are validated against `/^[0-9]{17,20}$/` before any 
 | `/api/profile` | GET, PATCH | yes | own row | `profileUpdateSchema`; strips email, ban and JWT fields |
 | `/api/server/[guildId]` | GET | yes | any scope | Guild settings |
 | `/api/server/[guildId]` | PATCH | yes | per-field `FIELD_SCOPE_MAP` | `guildSettingsUpdateSchema`, xpMin/xpMax cross-check, `findHoneypotChannelConflict`, `notifyBotReload` |
-| `/api/server/[guildId]/discord` | GET | yes | any scope | Channels and roles from Discord |
+| `/api/server/[guildId]/discord` | GET | yes | any scope | Channels and roles from Discord. Shortcut: a `guild_admins` row for this guild with at least one scope skips the Discord check |
 | `/api/server/[guildId]/leaderboard` | GET | yes | guild member | Top 100 from `user_xp`, no pagination |
-| `/api/server/[guildId]/schedules` | GET, POST | yes | any scope | POST: cron validation, `notifyBotReload` |
-| `/api/server/[guildId]/schedules/[scheduleId]` | PATCH, DELETE | yes | any scope | `notifyBotReload` |
+| `/api/server/[guildId]/schedules` | GET, POST | yes | GET any scope; POST `schedules` | POST: cron validation, `notifyBotReload` |
+| `/api/server/[guildId]/schedules/[scheduleId]` | PATCH, DELETE | yes | `schedules` | `notifyBotReload` |
 | `/api/server/[guildId]/suggestions` | GET | yes | any scope | List |
-| `/api/server/[guildId]/suggestions/[suggestionId]` | PATCH, DELETE | yes | any scope | Status change; DELETE archives |
-| `/api/server/[guildId]/youtube` | GET, POST | yes | any scope | POST: 409 on duplicate, `notifyBotReload` |
-| `/api/server/[guildId]/youtube/[subscriptionId]` | PATCH, DELETE | yes | any scope | `notifyBotReload` |
-| `/api/server/[guildId]/youtube/resolve` | POST | yes | any scope | Scrapes youtube.com for channel ID + name |
+| `/api/server/[guildId]/suggestions/[suggestionId]` | PATCH, DELETE | yes | `suggestions` | Status change; DELETE archives |
+| `/api/server/[guildId]/youtube` | GET, POST | yes | GET any scope; POST `youtube` | POST: 409 on duplicate, `notifyBotReload` |
+| `/api/server/[guildId]/youtube/[subscriptionId]` | PATCH, DELETE | yes | `youtube` | `notifyBotReload` |
+| `/api/server/[guildId]/youtube/resolve` | POST | yes | `youtube` | Scrapes youtube.com for channel ID + name |
 | `/api/leaderboard/[guildId]` | GET | **none (public)** | — | Top 100 + guild name |
 
 `notifyBotReload` is fire-and-forget; the bot's 4-hour sync is the fallback.
@@ -485,7 +485,7 @@ The web app uses lazy proxies for `env` and `db` to avoid build-time errors (Ver
 
 MEE6-style XP with in-memory caching to minimize DB writes (Neon charges for compute time).
 
-- **Startup:** `XpService.hydrate()` loads all `user_xp` rows into memory
+- **Startup:** `XpService.hydrate()` loads all `user_xp` rows into memory; messages before it finishes earn no XP
 - **Message XP:** Random XP per message (`xp_min`–`xp_max`), per-user cooldown, excluded channels/roles. All in-memory — zero DB writes per message.
 - **Level-up:** Announces in `xp_levelup_channel_id` if set
 - **`/rank`, `/leaderboard`:** Served entirely from memory
