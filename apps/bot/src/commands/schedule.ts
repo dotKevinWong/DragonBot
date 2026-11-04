@@ -6,6 +6,7 @@ import {
 import type { BotContext } from "../types/context.js";
 import type { BotCommand } from "../types/commands.js";
 import { errorEmbed, infoEmbed, successEmbed } from "../utils/embeds.js";
+import { replyServerOnly } from "../utils/command-helpers.js";
 import { cronToHuman } from "../services/scheduled-message.service.js";
 
 const command: BotCommand = {
@@ -28,7 +29,7 @@ const command: BotCommand = {
 
   async execute(interaction: ChatInputCommandInteraction, ctx: BotContext) {
     if (!interaction.guildId) {
-      await interaction.editReply({ embeds: [errorEmbed("This command can only be used in a server.")] });
+      await replyServerOnly(interaction);
       return;
     }
 

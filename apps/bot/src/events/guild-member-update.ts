@@ -7,6 +7,7 @@ import {
 } from "discord.js";
 import type { BotEvent } from "../types/commands.js";
 import type { BotContext } from "../types/context.js";
+import { idBlockField, userAuthor } from "../utils/log-embeds.js";
 
 /** Entries older than this belong to an earlier change, not the one being handled. */
 const MAX_ENTRY_AGE_MS = 10_000;
@@ -130,10 +131,7 @@ async function logRoleChange(
   if (addedRoleIds.length > 0 || removedRoleIds.length > 0) {
     const embed = new EmbedBuilder()
       .setColor(removedRoleIds.length > 0 ? 0xff0000 : 0xff9900)
-      .setAuthor({
-        name: newMember.user.tag,
-        iconURL: newMember.user.displayAvatarURL(),
-      })
+      .setAuthor(userAuthor(newMember.user))
       .setTitle("Update: Role")
       .addFields({ name: "User", value: `<@${newMember.id}>` });
 
@@ -147,10 +145,7 @@ async function logRoleChange(
       embed.addFields({ name: "Roles Removed", value: removed });
     }
 
-    embed.addFields({
-      name: "ID",
-      value: `\`\`\`js\nUser: ${newMember.id}\nGuild: ${guildId}\n\`\`\``,
-    });
+    embed.addFields(idBlockField([`User: ${newMember.id}`, `Guild: ${guildId}`]));
     embed.setTimestamp();
 
     await ctx.services.logging.sendLogEmbed(guildId, embed, newMember.client, ctx.logger);
@@ -167,19 +162,13 @@ async function logNicknameChange(
 
   const embed = new EmbedBuilder()
     .setColor(0xffcc00)
-    .setAuthor({
-      name: newMember.user.tag,
-      iconURL: newMember.user.displayAvatarURL(),
-    })
+    .setAuthor(userAuthor(newMember.user))
     .setTitle("Update: Nickname")
     .addFields(
       { name: "User", value: `<@${newMember.id}>` },
       { name: "Before", value: before ?? "*None*", inline: true },
       { name: "After", value: after ?? "*None*", inline: true },
-      {
-        name: "ID",
-        value: `\`\`\`js\nUser: ${newMember.id}\nGuild: ${guildId}\n\`\`\``,
-      },
+      idBlockField([`User: ${newMember.id}`, `Guild: ${guildId}`]),
     )
     .setTimestamp();
 

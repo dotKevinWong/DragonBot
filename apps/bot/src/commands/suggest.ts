@@ -1,8 +1,7 @@
 import { SlashCommandBuilder, EmbedBuilder, type ChatInputCommandInteraction } from "discord.js";
 import type { BotContext } from "../types/context.js";
 import type { BotCommand } from "../types/commands.js";
-import { AppError } from "../types/errors.js";
-import { errorEmbed } from "../utils/embeds.js";
+import { replyAppErrorOrFail, replyServerOnly } from "../utils/command-helpers.js";
 import { fetchGuildTextChannel } from "../utils/guild-channel.js";
 
 const command: BotCommand = {
@@ -15,7 +14,7 @@ const command: BotCommand = {
 
   async execute(interaction: ChatInputCommandInteraction, ctx: BotContext) {
     if (!interaction.guildId) {
-      await interaction.editReply({ embeds: [errorEmbed("This command can only be used in a server.")] });
+      await replyServerOnly(interaction);
       return;
     }
 
@@ -67,12 +66,7 @@ const command: BotCommand = {
         }
       }
     } catch (err) {
-      if (err instanceof AppError) {
-        await interaction.editReply({ embeds: [errorEmbed(err.message)] });
-        return;
-      }
-      ctx.logger.error({ err }, "Error in /suggest");
-      await interaction.editReply({ embeds: [errorEmbed("Something went wrong.")] });
+      await replyAppErrorOrFail(interaction, err, () => ctx.logger.error({ err }, "Error in /suggest"));
     }
   },
 };

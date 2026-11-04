@@ -24,7 +24,6 @@
     "zod": "^3.24.0"
   },
   "devDependencies": {
-    "@types/node-cron": "^3.0.11",
     "typescript": "^5.8.2",
     "vitest": "^3.0.0"
   }

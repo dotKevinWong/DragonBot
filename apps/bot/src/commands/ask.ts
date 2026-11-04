@@ -1,8 +1,8 @@
 import { SlashCommandBuilder, type ChatInputCommandInteraction } from "discord.js";
 import type { BotContext } from "../types/context.js";
 import type { BotCommand } from "../types/commands.js";
-import { AppError, ErrorCode } from "../types/errors.js";
 import { successEmbed, errorEmbed, infoEmbed } from "../utils/embeds.js";
+import { replyServerOnly } from "../utils/command-helpers.js";
 
 const command: BotCommand = {
   data: new SlashCommandBuilder()
@@ -14,7 +14,7 @@ const command: BotCommand = {
 
   async execute(interaction: ChatInputCommandInteraction, ctx: BotContext) {
     if (!interaction.guildId) {
-      await interaction.editReply({ embeds: [errorEmbed("This command can only be used in a server.")] });
+      await replyServerOnly(interaction);
       return;
     }
 

@@ -5,8 +5,8 @@ import {
 } from "discord.js";
 import type { BotContext } from "../types/context.js";
 import type { BotCommand } from "../types/commands.js";
-import { AppError } from "../types/errors.js";
 import { successEmbed, errorEmbed } from "../utils/embeds.js";
+import { replyAppErrorOrFail } from "../utils/command-helpers.js";
 
 const MONTH_CHOICES = [
   { name: "January", value: 1 },
@@ -122,12 +122,7 @@ const command: BotCommand = {
         await interaction.editReply({ embeds: [embed] });
       }
     } catch (err) {
-      if (err instanceof AppError) {
-        await interaction.editReply({ embeds: [errorEmbed(err.message)] });
-        return;
-      }
-      log.error({ err }, "Unhandled error in /birthday");
-      await interaction.editReply({ embeds: [errorEmbed("Something went wrong.")] });
+      await replyAppErrorOrFail(interaction, err, () => log.error({ err }, "Unhandled error in /birthday"));
     }
   },
 };

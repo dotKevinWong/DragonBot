@@ -60,3 +60,64 @@ describe("guildMemberAdd event", () => {
     expect(log.warn).not.toHaveBeenCalled();
   });
 });
+
+describe("guildMemberAdd verification sync", () => {
+  function syncSetup(options: { verified: boolean; addError?: Error; syncEnabled?: boolean }) {
+    const add = vi.fn(async (_roleId: string) => {
+      if (options.addError) throw options.addError;
+    });
+    const member = {
+      id: "u1",
+      guild: { id: "g1", name: "Drexel CCI", members: { fetch: vi.fn() } },
+      roles: { add },
+      client: {},
+    } as unknown as GuildMember;
+    const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const isVerified = vi.fn(async (_id: string) => options.verified);
+    const ctx = {
+      logger: { child: vi.fn(() => log) },
+      services: {
+        guild: {
+          getSettings: vi.fn(async () => ({
+            isVerificationSyncEnabled: options.syncEnabled ?? true,
+            verificationRoleId: "verified-role",
+          })),
+        },
+        user: { isVerified },
+        logging: { shouldLog: vi.fn(async () => false) },
+      },
+    } as unknown as BotContext;
+    return { member, ctx, add, log, isVerified };
+  }
+
+  it("adds the role to a verified member from the event, without fetching", async () => {
+    const { member, ctx, add, log } = syncSetup({ verified: true });
+
+    await event.execute(member, ctx);
+
+    expect(add).toHaveBeenCalledWith("verified-role");
+    expect(member.guild.members.fetch).not.toHaveBeenCalled();
+    expect(log.info).toHaveBeenCalledWith("Auto-synced verification role");
+  });
+
+  it("warns when the role can't be added", async () => {
+    const err = new Error("Missing Permissions");
+    const { member, ctx, log } = syncSetup({ verified: true, addError: err });
+
+    await event.execute(member, ctx);
+
+    expect(log.warn).toHaveBeenCalledWith({ err }, "Failed to sync verification role");
+    expect(log.info).not.toHaveBeenCalled();
+  });
+
+  it("adds nothing for an unverified member, or with sync off", async () => {
+    const unverified = syncSetup({ verified: false });
+    await event.execute(unverified.member, unverified.ctx);
+    expect(unverified.add).not.toHaveBeenCalled();
+
+    const off = syncSetup({ verified: true, syncEnabled: false });
+    await event.execute(off.member, off.ctx);
+    expect(off.isVerified).not.toHaveBeenCalled();
+    expect(off.add).not.toHaveBeenCalled();
+  });
+});

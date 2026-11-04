@@ -1026,6 +1026,24 @@ describe("HoneypotWarningSync.sync", () => {
     }
   });
 
+  it("cuts a pin failure's reason to 200 characters, and shows a non-Error failure as text", async () => {
+    const failures: Array<{ error: unknown; why: string }> = [
+      { error: apiError(RESTJSONErrorCodes.MissingAccess, "y".repeat(300)), why: "y".repeat(200) },
+      { error: apiError(RESTJSONErrorCodes.MissingAccess, "z".repeat(200)), why: "z".repeat(200) },
+      { error: new Error(""), why: "Error" },
+      { error: "pin service unavailable", why: "pin service unavailable" },
+      { error: { code: 50013 }, why: "[object Object]" },
+    ];
+    for (const { error, why } of failures) {
+      const channel = fakeChannel("c1", { postedPinError: error as Error });
+      const { warning, logging } = setupServer({}, { c1: channel });
+
+      await warning.sync("g1");
+
+      expect(notices(logging)).toEqual([`Couldn't pin the honeypot warning in <#c1>: ${why}.`]);
+    }
+  });
+
   it("leaves a server without a honeypot or a stored warning alone", async () => {
     // Every dashboard save syncs its server, honeypot or not.
     const { warning, client, guildService, logging, logger } = setupServer({ isHoneypotEnabled: false }, {});

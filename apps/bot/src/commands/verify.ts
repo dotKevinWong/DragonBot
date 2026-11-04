@@ -5,8 +5,9 @@ import {
 } from "discord.js";
 import type { BotContext } from "../types/context.js";
 import type { BotCommand } from "../types/commands.js";
-import { AppError } from "../types/errors.js";
 import { successEmbed, errorEmbed } from "../utils/embeds.js";
+import { replyAppErrorOrFail, replyServerOnly } from "../utils/command-helpers.js";
+import { addVerificationRole } from "../utils/verification-role.js";
 
 const command: BotCommand = {
   ephemeral: true,
@@ -35,7 +36,7 @@ const command: BotCommand = {
 
   async execute(interaction: ChatInputCommandInteraction, ctx: BotContext) {
     if (!interaction.guildId) {
-      await interaction.editReply({ embeds: [errorEmbed("This command can only be used in a server.")] });
+      await replyServerOnly(interaction);
       return;
     }
 
@@ -66,8 +67,7 @@ const command: BotCommand = {
         const guild = await ctx.services.guild.getSettings(interaction.guildId);
         if (guild?.verificationRoleId && interaction.guild) {
           try {
-            const member = await interaction.guild.members.fetch(interaction.user.id);
-            await member.roles.add(guild.verificationRoleId);
+            await addVerificationRole(interaction.guild, interaction.user.id, guild.verificationRoleId);
           } catch (err) {
             log.warn({ err }, "Failed to assign verification role");
           }
@@ -88,8 +88,8 @@ const command: BotCommand = {
 
         const guild = await ctx.services.guild.getSettings(interaction.guildId);
         if (guild?.verificationRoleId && interaction.guild) {
-          const member = await interaction.guild.members.fetch(interaction.user.id);
-          await member.roles.add(guild.verificationRoleId);
+          // Not caught here: a failure reaches the catch below and fails the command.
+          await addVerificationRole(interaction.guild, interaction.user.id, guild.verificationRoleId);
         }
 
         await interaction.editReply({
@@ -97,12 +97,7 @@ const command: BotCommand = {
         });
       }
     } catch (err) {
-      if (err instanceof AppError) {
-        await interaction.editReply({ embeds: [errorEmbed(err.message)] });
-        return;
-      }
-      log.error({ err }, "Unhandled error in /verify");
-      await interaction.editReply({ embeds: [errorEmbed("Something went wrong.")] });
+      await replyAppErrorOrFail(interaction, err, () => log.error({ err }, "Unhandled error in /verify"));
     }
   },
 };

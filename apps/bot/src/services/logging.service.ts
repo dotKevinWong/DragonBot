@@ -4,8 +4,6 @@ import type { Logger } from "pino";
 import { fetchGuildTextChannel } from "../utils/guild-channel.js";
 import type { LogEventType } from "@dragonbot/db";
 
-export type { LogEventType };
-
 export class LoggingService {
   constructor(private guildService: GuildService) {}
 

@@ -7,8 +7,6 @@ const settings = {
   xpMin: 15,
   xpMax: 15,
   xpCooldownSeconds: 0,
-  xpExcludedChannelIds: [],
-  xpExcludedRoleIds: [],
 };
 
 /** A batchUpsert call still in flight, which the test settles by hand. */

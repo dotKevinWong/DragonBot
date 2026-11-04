@@ -57,6 +57,20 @@ describe("ModerationService.syncBan", () => {
     expect(logger.warn).toHaveBeenCalledTimes(1);
   });
 
+  it("doesn't disable ban sync for a non-Discord error that carries the Unknown Guild code", async () => {
+    const plain = Object.assign(new Error("Unknown Guild"), { code: RESTJSONErrorCodes.UnknownGuild });
+    const { service, guildService, client, logger } = setup({ odd: plain });
+
+    const count = await service.syncBan("user-1", "source", client, logger);
+
+    expect(count).toBe(0);
+    expect(guildService.disableBanSync).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(
+      { err: plain, userId: "user-1", guildId: "odd" },
+      "Failed to sync ban to guild",
+    );
+  });
+
   it("skips the source guild", async () => {
     const { service, client, logger, ban } = setup({ source: null });
 

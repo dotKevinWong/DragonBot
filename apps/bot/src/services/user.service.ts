@@ -1,5 +1,4 @@
 import type { UserRepository } from "../repositories/user.repository.js";
-import type { users } from "@dragonbot/db";
 import { AppError, ErrorCode } from "../types/errors.js";
 import { TTLCache } from "../utils/cache.js";
 
@@ -8,10 +7,6 @@ export class UserService {
   private verifiedCache = new TTLCache<boolean>(86400); // 24h (invalidated on markVerified, TTL is safety net only)
 
   constructor(private repo: UserRepository) {}
-
-  async getOrCreate(discordId: string) {
-    return this.repo.upsert(discordId);
-  }
 
   async getProfile(discordId: string) {
     const user = await this.repo.findByDiscordId(discordId);
@@ -46,10 +41,5 @@ export class UserService {
   async markBanned(discordId: string, banGuildId: string) {
     await this.repo.upsert(discordId);
     return this.repo.markBanned(discordId, banGuildId);
-  }
-
-  async updateProfile(discordId: string, profile: Partial<typeof users.$inferInsert>) {
-    await this.repo.upsert(discordId);
-    return this.repo.updateProfile(discordId, profile);
   }
 }

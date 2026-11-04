@@ -7,7 +7,37 @@ import type { BotContext } from "../types/context.js";
 import type { BotCommand } from "../types/commands.js";
 import { AppError } from "../types/errors.js";
 import { successEmbed, errorEmbed, infoEmbed } from "../utils/embeds.js";
-import { PERMISSION_SCOPES } from "@dragonbot/db";
+import { replyServerOnly } from "../utils/command-helpers.js";
+import { PERMISSION_SCOPES, missingScopes } from "@dragonbot/db";
+
+/** The permissions option as a list: each item trimmed and lowercased. Empty items and duplicates are kept. */
+function parsePermissionList(permStr: string): string[] {
+  return permStr.split(",").map((p) => p.trim().toLowerCase());
+}
+
+/**
+ * Why the caller may not grant `requested`, as the text to show, or null if they may. Checks, in order: every item is
+ * a known scope; then, unless the caller has Manage Server (which skips reading their grants), that the caller holds
+ * every requested scope ("*" only by a "*" holder). Used by managers-add and managers-update.
+ */
+async function grantRefusal(
+  ctx: BotContext,
+  guildId: string,
+  callerId: string,
+  hasManageGuild: boolean,
+  requested: string[],
+): Promise<string | null> {
+  const invalidPerms = requested.filter((p) => !(PERMISSION_SCOPES as readonly string[]).includes(p));
+  if (invalidPerms.length > 0) {
+    return `Invalid permissions: \`${invalidPerms.join(", ")}\`\nValid: \`${PERMISSION_SCOPES.join(", ")}\``;
+  }
+  if (hasManageGuild) return null;
+
+  const callerPerms = await ctx.services.guildAdmin.getPermissions(guildId, callerId);
+  const missing = missingScopes(requested, callerPerms);
+  if (missing.length === 0) return null;
+  return `You can only grant permissions you have. Missing: ${requested.includes("*") ? "*" : missing.join(", ")}`;
+}
 
 const command: BotCommand = {
   ephemeral: true,
@@ -56,7 +86,7 @@ const command: BotCommand = {
 
   async execute(interaction: ChatInputCommandInteraction, ctx: BotContext) {
     if (!interaction.guildId) {
-      await interaction.editReply({ embeds: [errorEmbed("This command can only be used in a server.")] });
+      await replyServerOnly(interaction);
       return;
     }
 
@@ -138,38 +168,29 @@ const command: BotCommand = {
     }
 
     // --- Manager subcommands ---
-    if (sub === "managers-add") {
+    if (sub === "managers-add" || sub === "managers-update") {
       const targetUser = interaction.options.getUser("user", true);
       const permStr = interaction.options.getString("permissions", true);
-      const permissions = permStr.split(",").map((p) => p.trim().toLowerCase());
+      const permissions = parsePermissionList(permStr);
 
-      // Validate permission names
-      const invalidPerms = permissions.filter((p) => !(PERMISSION_SCOPES as readonly string[]).includes(p));
-      if (invalidPerms.length > 0) {
-        await interaction.editReply({
-          embeds: [errorEmbed(`Invalid permissions: \`${invalidPerms.join(", ")}\`\nValid: \`${PERMISSION_SCOPES.join(", ")}\``)],
-        });
+      const refusal = await grantRefusal(ctx, guildId, userId, hasManageGuild, permissions);
+      if (refusal) {
+        await interaction.editReply({ embeds: [errorEmbed(refusal)] });
         return;
       }
 
-      if (!hasManageGuild) {
-        const callerPerms = await ctx.services.guildAdmin.getPermissions(guildId, userId);
-        if (!callerPerms.includes("*")) {
-          const unauthorized = permissions.filter((p) => p !== "*" && !callerPerms.includes(p));
-          if (unauthorized.length > 0 || permissions.includes("*")) {
-            await interaction.editReply({
-              embeds: [errorEmbed(`You can only grant permissions you have. Missing: ${permissions.includes("*") ? "*" : unauthorized.join(", ")}`)],
-            });
-            return;
-          }
-        }
-      }
-
       try {
-        await ctx.services.guildAdmin.addAdmin(guildId, targetUser.id, permissions, userId);
-        await interaction.editReply({
-          embeds: [successEmbed(`Added ${targetUser.toString()} as a manager with permissions: \`${permissions.join(", ")}\``)],
-        });
+        if (sub === "managers-add") {
+          await ctx.services.guildAdmin.addAdmin(guildId, targetUser.id, permissions, userId);
+          await interaction.editReply({
+            embeds: [successEmbed(`Added ${targetUser.toString()} as a manager with permissions: \`${permissions.join(", ")}\``)],
+          });
+        } else {
+          await ctx.services.guildAdmin.updatePermissions(guildId, targetUser.id, permissions, userId);
+          await interaction.editReply({
+            embeds: [successEmbed(`Updated ${targetUser.toString()} permissions to: \`${permissions.join(", ")}\``)],
+          });
+        }
       } catch (err) {
         if (err instanceof AppError) {
           await interaction.editReply({ embeds: [errorEmbed(err.message)] });
@@ -219,47 +240,6 @@ const command: BotCommand = {
       await interaction.editReply({
         embeds: [infoEmbed(`**Guild Managers**\n\n${lines.join("\n")}`)],
       });
-      return;
-    }
-
-    if (sub === "managers-update") {
-      const targetUser = interaction.options.getUser("user", true);
-      const permStr = interaction.options.getString("permissions", true);
-      const permissions = permStr.split(",").map((p) => p.trim().toLowerCase());
-
-      const invalidPerms = permissions.filter((p) => !(PERMISSION_SCOPES as readonly string[]).includes(p));
-      if (invalidPerms.length > 0) {
-        await interaction.editReply({
-          embeds: [errorEmbed(`Invalid permissions: \`${invalidPerms.join(", ")}\`\nValid: \`${PERMISSION_SCOPES.join(", ")}\``)],
-        });
-        return;
-      }
-
-      if (!hasManageGuild) {
-        const callerPerms = await ctx.services.guildAdmin.getPermissions(guildId, userId);
-        if (!callerPerms.includes("*")) {
-          const unauthorized = permissions.filter((p) => p !== "*" && !callerPerms.includes(p));
-          if (unauthorized.length > 0 || permissions.includes("*")) {
-            await interaction.editReply({
-              embeds: [errorEmbed(`You can only grant permissions you have. Missing: ${permissions.includes("*") ? "*" : unauthorized.join(", ")}`)],
-            });
-            return;
-          }
-        }
-      }
-
-      try {
-        await ctx.services.guildAdmin.updatePermissions(guildId, targetUser.id, permissions, userId);
-        await interaction.editReply({
-          embeds: [successEmbed(`Updated ${targetUser.toString()} permissions to: \`${permissions.join(", ")}\``)],
-        });
-      } catch (err) {
-        if (err instanceof AppError) {
-          await interaction.editReply({ embeds: [errorEmbed(err.message)] });
-          return;
-        }
-        throw err;
-      }
       return;
     }
   },

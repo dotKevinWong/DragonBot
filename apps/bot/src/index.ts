@@ -8,37 +8,9 @@ dotenv.config({ path: path.resolve(__dirname2, "../../../.env") });
 import { loadConfig } from "./config.js";
 import { createLogger } from "./lib/logger.js";
 import { createClient } from "./client.js";
-import { EmailService } from "./lib/email.js";
-import { AIService } from "./lib/openai.js";
-import { GuildRepository } from "./repositories/guild.repository.js";
-import { UserRepository } from "./repositories/user.repository.js";
-import { VerificationRepository } from "./repositories/verification.repository.js";
-import { SuggestionRepository } from "./repositories/suggestion.repository.js";
-import { AuthRepository } from "./repositories/auth.repository.js";
-import { GuildAdminRepository } from "./repositories/guild-admin.repository.js";
-import { GuildService } from "./services/guild.service.js";
-import { UserService } from "./services/user.service.js";
-import { VerificationService } from "./services/verification.service.js";
-import { AuthService } from "./services/auth.service.js";
-import { SuggestionService } from "./services/suggestion.service.js";
-import { ModerationService } from "./services/moderation.service.js";
-import { LoggingService } from "./services/logging.service.js";
-import { GuildAdminService } from "./services/guild-admin.service.js";
-import { ScheduledMessageRepository } from "./repositories/scheduled-message.repository.js";
-import { ScheduledMessageService } from "./services/scheduled-message.service.js";
-import { XpRepository } from "./repositories/xp.repository.js";
-import { XpService } from "./services/xp.service.js";
-import { BirthdayRepository } from "./repositories/birthday.repository.js";
-import { XpArchiveRepository } from "./repositories/xp-archive.repository.js";
-import { BirthdayService } from "./services/birthday.service.js";
-import { YouTubeRepository } from "./repositories/youtube.repository.js";
-import { YouTubeService } from "./services/youtube.service.js";
-import { HoneypotService } from "./services/honeypot.service.js";
-import { SchedulerManager } from "./lib/scheduler.js";
-import { BirthdayChecker } from "./lib/birthday-checker.js";
-import { YouTubeChecker } from "./lib/youtube-checker.js";
-import { HoneypotWarningSync } from "./lib/honeypot-warning.js";
-import { startWebhookServer } from "./lib/webhook-server.js";
+import { buildServices } from "./bootstrap/services.js";
+import { runStartup } from "./bootstrap/startup.js";
+import { installProcessHandlers } from "./bootstrap/process-handlers.js";
 import {
   loadCommands,
   registerCommands,
@@ -57,61 +29,15 @@ async function main() {
   // 2. Database
   const db = createBotClient(config.DATABASE_URL);
 
-  // 3. External services
-  const email = new EmailService(config.RESEND_API_KEY, config.RESEND_FROM_EMAIL);
-  const ai = new AIService(config.OPENAI_API_KEY, config.OPENAI_MODEL);
-
-  // 4. Repositories
-  const guildRepo = new GuildRepository(db);
-  const userRepo = new UserRepository(db);
-  const verificationRepo = new VerificationRepository(db);
-  const suggestionRepo = new SuggestionRepository(db);
-  const authRepo = new AuthRepository(db);
-  const guildAdminRepo = new GuildAdminRepository(db);
-
-  // 5. Services
-  const guildService = new GuildService(guildRepo);
-  const userService = new UserService(userRepo);
-  const verificationService = new VerificationService(verificationRepo, guildRepo, userRepo, email);
-  const authService = new AuthService(authRepo);
-  const suggestionService = new SuggestionService(suggestionRepo, guildRepo);
-  const moderationService = new ModerationService(guildService);
-  const loggingService = new LoggingService(guildService);
-  const guildAdminService = new GuildAdminService(guildAdminRepo);
-  const scheduledMessageRepo = new ScheduledMessageRepository(db);
-  const scheduledMessageService = new ScheduledMessageService(scheduledMessageRepo);
-  const xpRepo = new XpRepository(db);
-  const xpService = new XpService(xpRepo, logger);
-  const birthdayRepo = new BirthdayRepository(db);
-  const birthdayService = new BirthdayService(birthdayRepo);
-  const youtubeRepo = new YouTubeRepository(db);
-  const youtubeService = new YouTubeService();
-  const honeypotService = new HoneypotService();
-  const xpArchiveRepo = new XpArchiveRepository(db);
+  // 3-5. External services, repositories, services (bootstrap/services.ts)
+  const { ai, services, youtubeRepo } = buildServices(config, logger, db);
 
   // 6. Context
   const ctx: BotContext = {
-    db,
     logger,
-    email,
     ai,
     config,
-    services: {
-      user: userService,
-      guild: guildService,
-      verification: verificationService,
-      auth: authService,
-      suggestion: suggestionService,
-      moderation: moderationService,
-      logging: loggingService,
-      guildAdmin: guildAdminService,
-      scheduledMessage: scheduledMessageService,
-      xp: xpService,
-      birthday: birthdayService,
-      youtube: youtubeService,
-      honeypot: honeypotService,
-    },
-    xpArchiveRepo,
+    services,
   };
 
   // 7. Discord client
@@ -126,145 +52,15 @@ async function main() {
   await loadEvents(eventsDir, client, ctx, logger);
   bindInteractionHandler(client, commands, ctx);
 
-  // 9. Ready event + scheduler + XP hydration
-  client.once("clientReady", async (c) => {
-    logger.info({ user: c.user.tag, guilds: c.guilds.cache.size }, "Bot is online");
-
-    // Hydrate guild settings into memory (eliminates DB reads during normal operation)
-    const guildCount = await guildService.hydrateAll();
-    logger.info({ guildCount }, "Guild settings hydrated");
-
-    // Hydrate XP data into memory
-    await xpService.hydrate();
-
-    // Start scheduled message cron jobs
-    const scheduler = new SchedulerManager(client, scheduledMessageService, logger);
-    await scheduler.loadAll();
-    ctx.scheduler = scheduler;
-
-    // Birthday checker — runs on startup (catch-up, below) and via 4-hour sync timer
-    const birthdayChecker = new BirthdayChecker(client, birthdayService, guildService, logger);
-
-    // YouTube checker — runs on startup (below) and via 4-hour sync timer. Each run announces every
-    // video newer than the last one seen, so restarts and the long interval don't drop uploads.
-    const youtubeChecker = new YouTubeChecker(client, youtubeService, youtubeRepo, guildService, logger);
-
-    // Honeypot warning sync — runs on startup (below), via the 4-hour sync timer, after dashboard saves, on /admin reload
-    // and when the warning is deleted
-    const honeypotWarning = new HoneypotWarningSync(client, guildService, honeypotService, loggingService, logger);
-    ctx.honeypotWarning = honeypotWarning;
-
-    // Start webhook server for instant cache invalidation from web dashboard. Before the slow startup checks below,
-    // so dashboard reload pings sent during them are not refused.
-    if (config.BOT_WEBHOOK_SECRET) {
-      startWebhookServer({
-        port: config.BOT_WEBHOOK_PORT,
-        secret: config.BOT_WEBHOOK_SECRET,
-        guildService,
-        logger,
-        getScheduler: () => ctx.scheduler,
-        // A dashboard save for one server resets that server's repost budget, so an admin can retry its warning.
-        onGuildReload: (guildId) =>
-          guildId ? honeypotWarning.sync(guildId, { resetBudget: true }) : honeypotWarning.syncAll(),
-      });
-    }
-
-    // Start 4-hour combined sync timer: flush XP + reload schedules in one DB connection window
-    const FOUR_HOURS_MS = 4 * 60 * 60 * 1000;
-    const syncTimer = setInterval(async () => {
-      try {
-        await xpService.flush();
-        await guildService.hydrateAll();
-        await scheduler.reload();
-        await birthdayChecker.check();
-        await youtubeChecker.check();
-        logger.info("Periodic sync complete (XP flush + guild settings + schedule reload + birthday check + YouTube check)");
-      } catch (err) {
-        logger.error({ err }, "Periodic sync failed");
-      }
-      // After the birthday check: it lists servers from the settings cache, and this sync's writes drop entries from it.
-      // Caught on its own, so a failed earlier step doesn't skip it.
-      try {
-        await honeypotWarning.syncAll();
-      } catch (err) {
-        logger.error({ err }, "Periodic honeypot warning sync failed");
-      }
-    }, FOUR_HOURS_MS);
-    if (syncTimer.unref) syncTimer.unref();
-
-    // Startup birthday catch-up and YouTube check. After the webhook server and the timer, which they can take minutes
-    // to finish.
-    await birthdayChecker.check();
-    ctx.birthdayChecker = birthdayChecker;
-    logger.info("Birthday checker initialized");
-
-    await youtubeChecker.check();
-    ctx.youtubeChecker = youtubeChecker;
-    logger.info("YouTube checker initialized");
-
-    // Last, so a slow sync can't hold back the webhook server or the timer. Caught here too, so it can't crash the bot.
-    try {
-      await honeypotWarning.syncAll();
-    } catch (err) {
-      logger.error({ err }, "Startup honeypot warning sync failed");
-    }
-  });
+  // 9. Ready event: hydration, scheduler, webhook server, 4-hour timer, startup checks (bootstrap/startup.ts).
+  // Registered before login; a rejection reaches the unhandledRejection handler.
+  client.once("clientReady", (c) => runStartup(c, { client, ctx, youtubeRepo }));
 
   // 10. Login
   await client.login(config.DISCORD_API_TOKEN);
 
-  // 11. Graceful shutdown + crash handlers
-  let isShuttingDown = false;
-  const shutdown = async (signal: string) => {
-    if (isShuttingDown) return;
-    isShuttingDown = true;
-    logger.info({ signal }, "Shutting down...");
-
-    // Keep event loop alive with a ref'd timer as a hard deadline
-    const deadline = setTimeout(() => {
-      logger.warn("Shutdown timed out — exiting without flush");
-      process.exit(1);
-    }, 8000);
-
-    try {
-      // Let in-flight honeypot actions finish: destroy() clears the REST token, which would strand a kick between
-      // its ban and its unban
-      await honeypotService.drain(5_000);
-      // Disconnect from Discord to stop receiving new events
-      client.destroy();
-      // Flush XP to database
-      await xpService.flush();
-      logger.info("XP data flushed to database");
-    } catch (err) {
-      logger.error({ err }, "Failed to flush XP during shutdown");
-    } finally {
-      clearTimeout(deadline);
-      process.exit(0);
-    }
-  };
-
-  process.on("SIGTERM", () => { shutdown("SIGTERM"); });
-  process.on("SIGINT", () => { shutdown("SIGINT"); });
-
-  process.on("uncaughtException", async (err) => {
-    logger.fatal({ err }, "Uncaught exception — flushing XP before exit");
-    try {
-      await xpService.flush();
-    } catch (flushErr) {
-      logger.error({ err: flushErr }, "Failed to flush XP during crash");
-    }
-    process.exit(1);
-  });
-
-  process.on("unhandledRejection", async (reason) => {
-    logger.fatal({ reason }, "Unhandled rejection — flushing XP before exit");
-    try {
-      await xpService.flush();
-    } catch (flushErr) {
-      logger.error({ err: flushErr }, "Failed to flush XP during crash");
-    }
-    process.exit(1);
-  });
+  // 11. Graceful shutdown + crash handlers (bootstrap/process-handlers.ts), after login as before
+  installProcessHandlers({ logger, client, xpService: services.xp, honeypotService: services.honeypot });
 }
 
 main().catch((err) => {

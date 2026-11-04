@@ -1,8 +1,9 @@
 import type { Logger } from "pino";
 import type { XpRepository } from "../repositories/xp.repository.js";
+import type { XpArchiveSnapshotEntry } from "../repositories/xp-archive.repository.js";
 import { levelFromXp, randomXp, xpProgress, progressBar } from "../utils/xp.js";
 
-export interface XpEntry {
+interface XpEntry {
   totalXp: number;
   level: number;
   messageCount: number;      // all messages sent
@@ -13,13 +14,13 @@ export interface XpEntry {
   version: number;
 }
 
-export interface XpProcessResult {
+interface XpProcessResult {
   leveledUp: boolean;
   newLevel: number;
   xpGained: number;
 }
 
-export interface XpRankInfo {
+interface XpRankInfo {
   totalXp: number;
   level: number;
   rank: number;
@@ -44,13 +45,17 @@ interface GuildXpSettings {
   xpMin: number;
   xpMax: number;
   xpCooldownSeconds: number;
-  xpExcludedChannelIds: string[];
-  xpExcludedRoleIds: string[];
 }
 
 export class XpService {
+  /** Every entry, keyed `guildId:discordId`. Flushes, stats and per-message lookups use this. */
   private xpMap = new Map<string, XpEntry>();
-  private flushTimer: ReturnType<typeof setInterval> | null = null;
+  /**
+   * The same entry objects grouped by guild, then by discordId, so guild reads don't scan every guild. Each inner map
+   * gets its keys in the same order as xpMap, so users tied on XP keep the same order. Kept in step by setEntry, the
+   * only place entries are added or replaced; nothing removes entries.
+   */
+  private byGuild = new Map<string, Map<string, XpEntry>>();
   private isHydrated = false;
   private isFlushing = false;
 
@@ -63,8 +68,7 @@ export class XpService {
   async hydrate(): Promise<void> {
     const rows = await this.repo.findAll();
     for (const row of rows) {
-      const key = `${row.guildId}:${row.discordId}`;
-      this.xpMap.set(key, {
+      this.setEntry(row.guildId, row.discordId, {
         totalXp: row.totalXp,
         level: row.level,
         messageCount: row.messageCount,
@@ -97,7 +101,7 @@ export class XpService {
     let entry = this.xpMap.get(key);
     if (!entry) {
       entry = { totalXp: 0, level: 0, messageCount: 0, xpMessageCount: 0, lastMessageAt: 0, dirty: false, version: 0 };
-      this.xpMap.set(key, entry);
+      this.setEntry(guildId, discordId, entry);
     }
 
     // Always count the message, regardless of cooldown
@@ -136,18 +140,25 @@ export class XpService {
 
     if (!entry) return null;
 
-    // Collect all users in this guild and sort by XP
-    const guildEntries = this.getGuildEntries(guildId);
-    guildEntries.sort((a, b) => b.totalXp - a.totalXp);
-
-    const rank = guildEntries.findIndex((e) => e.discordId === discordId) + 1;
+    // The position a stable sort by XP (descending) would give: everyone with more XP, plus everyone tied who comes
+    // first in insertion order
+    const guildEntries = this.byGuild.get(guildId)!;
+    let rank = 1;
+    let beforeTarget = true;
+    for (const [id, other] of guildEntries) {
+      if (id === discordId) {
+        beforeTarget = false;
+      } else if (other.totalXp > entry.totalXp || (beforeTarget && other.totalXp === entry.totalXp)) {
+        rank++;
+      }
+    }
     const progress = xpProgress(entry.totalXp, entry.level);
 
     return {
       totalXp: entry.totalXp,
       level: entry.level,
       rank,
-      totalUsers: guildEntries.length,
+      totalUsers: guildEntries.size,
       messageCount: entry.messageCount,
       xpMessageCount: entry.xpMessageCount,
       currentLevelXp: progress.current,
@@ -158,11 +169,12 @@ export class XpService {
 
   /** Get the top N users by XP for a guild. Reads from memory only. */
   getLeaderboard(guildId: string, limit = 10): LeaderboardEntry[] {
-    const guildEntries = this.getGuildEntries(guildId);
-    guildEntries.sort((a, b) => b.totalXp - a.totalXp);
+    const guildEntries = [...(this.byGuild.get(guildId) ?? [])];
+    // A stable sort, so users tied on XP stay in insertion order
+    guildEntries.sort(([, a], [, b]) => b.totalXp - a.totalXp);
 
-    return guildEntries.slice(0, limit).map((e, i) => ({
-      discordId: e.discordId,
+    return guildEntries.slice(0, limit).map(([discordId, e], i) => ({
+      discordId,
       totalXp: e.totalXp,
       level: e.level,
       messageCount: e.messageCount,
@@ -177,13 +189,7 @@ export class XpService {
     const entry = this.xpMap.get(key);
     if (!entry) return false;
 
-    entry.totalXp = 0;
-    entry.level = 0;
-    entry.messageCount = 0;
-    entry.xpMessageCount = 0;
-    entry.lastMessageAt = 0;
-    entry.dirty = true;
-    entry.version++;
+    this.zero(entry);
     return true;
   }
 
@@ -248,31 +254,6 @@ export class XpService {
     this.logger.info({ count: dirtyEntries.length }, "XP data flushed to database");
   }
 
-  /** Start the periodic flush timer. */
-  startFlushTimer(intervalMs: number): void {
-    if (this.flushTimer) {
-      clearInterval(this.flushTimer);
-    }
-    this.flushTimer = setInterval(() => {
-      this.flush().catch((err) => {
-        this.logger.error({ err }, "Periodic XP flush failed");
-      });
-    }, intervalMs);
-    // Don't keep the process alive just for the flush timer
-    if (this.flushTimer.unref) {
-      this.flushTimer.unref();
-    }
-    this.logger.info({ intervalMs }, "XP flush timer started");
-  }
-
-  /** Stop the periodic flush timer. */
-  stopFlushTimer(): void {
-    if (this.flushTimer) {
-      clearInterval(this.flushTimer);
-      this.flushTimer = null;
-    }
-  }
-
   /** Debug stats. */
   getStats(): { totalEntries: number; dirtyEntries: number; isHydrated: boolean } {
     let dirtyCount = 0;
@@ -287,9 +268,9 @@ export class XpService {
   }
 
   /** Get a snapshot of all guild entries for archiving. */
-  getGuildSnapshot(guildId: string): { discordId: string; totalXp: number; level: number; messageCount: number; xpMessageCount: number; lastMessageAt: number }[] {
-    return this.getGuildEntries(guildId).map((e) => ({
-      discordId: e.discordId,
+  getGuildSnapshot(guildId: string): XpArchiveSnapshotEntry[] {
+    return [...(this.byGuild.get(guildId) ?? [])].map(([discordId, e]) => ({
+      discordId,
       totalXp: e.totalXp,
       level: e.level,
       messageCount: e.messageCount,
@@ -300,28 +281,18 @@ export class XpService {
 
   /** Zero all XP entries for a guild in memory. Mark dirty for flush. */
   resetAllInMemory(guildId: string): number {
-    const prefix = `${guildId}:`;
     let count = 0;
-    for (const [key, entry] of this.xpMap) {
-      if (key.startsWith(prefix)) {
-        entry.totalXp = 0;
-        entry.level = 0;
-        entry.messageCount = 0;
-        entry.xpMessageCount = 0;
-        entry.lastMessageAt = 0;
-        entry.dirty = true;
-        entry.version++;
-        count++;
-      }
+    for (const entry of this.byGuild.get(guildId)?.values() ?? []) {
+      this.zero(entry);
+      count++;
     }
     return count;
   }
 
   /** Restore archived entries into memory. Marks dirty for flush. */
-  rehydrateGuild(guildId: string, entries: { discordId: string; totalXp: number; level: number; messageCount: number; xpMessageCount: number; lastMessageAt: number }[]): number {
+  rehydrateGuild(guildId: string, entries: XpArchiveSnapshotEntry[]): number {
     for (const e of entries) {
-      const key = `${guildId}:${e.discordId}`;
-      this.xpMap.set(key, {
+      this.setEntry(guildId, e.discordId, {
         totalXp: e.totalXp,
         level: e.level,
         messageCount: e.messageCount,
@@ -335,15 +306,25 @@ export class XpService {
     return entries.length;
   }
 
-  /** Extract all entries for a guild with their discordIds. */
-  private getGuildEntries(guildId: string): (XpEntry & { discordId: string })[] {
-    const prefix = `${guildId}:`;
-    const entries: (XpEntry & { discordId: string })[] = [];
-    for (const [key, entry] of this.xpMap) {
-      if (key.startsWith(prefix)) {
-        entries.push({ ...entry, discordId: key.slice(prefix.length) });
-      }
+  /** Add or replace an entry in both maps. A replaced key keeps its place in both, as Map.set does. */
+  private setEntry(guildId: string, discordId: string, entry: XpEntry): void {
+    this.xpMap.set(`${guildId}:${discordId}`, entry);
+    let guildEntries = this.byGuild.get(guildId);
+    if (!guildEntries) {
+      guildEntries = new Map();
+      this.byGuild.set(guildId, guildEntries);
     }
-    return entries;
+    guildEntries.set(discordId, entry);
+  }
+
+  /** Zero an entry's XP and counts, and mark it dirty for the next flush. */
+  private zero(entry: XpEntry): void {
+    entry.totalXp = 0;
+    entry.level = 0;
+    entry.messageCount = 0;
+    entry.xpMessageCount = 0;
+    entry.lastMessageAt = 0;
+    entry.dirty = true;
+    entry.version++;
   }
 }

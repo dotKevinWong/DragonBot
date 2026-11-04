@@ -72,7 +72,7 @@ export class SchedulerManager {
   }
 
   /** Register a cron job for a scheduled message */
-  addJob(schedule: ScheduledMessageRow): void {
+  private addJob(schedule: ScheduledMessageRow): void {
     this.removeJob(schedule.id);
 
     if (!cron.validate(schedule.cronExpression)) {
@@ -82,7 +82,7 @@ export class SchedulerManager {
 
     const task = cron.schedule(schedule.cronExpression, async () => {
       // Use cached schedule data — no DB read on each fire.
-      // Cache is refreshed on reload() (daily sync) and reloadJob() (after admin edits).
+      // Cache is refreshed on reload(): startup, the 4-hour sync, the reload webhook and /admin reload.
       const cached = this.jobs.get(schedule.id);
       if (cached && cached.schedule.isEnabled) {
         await this.executeJob(cached.schedule);
@@ -98,30 +98,12 @@ export class SchedulerManager {
   }
 
   /** Remove a cron job */
-  removeJob(scheduleId: string): void {
+  private removeJob(scheduleId: string): void {
     const existing = this.jobs.get(scheduleId);
     if (existing) {
       existing.task.stop();
       this.jobs.delete(scheduleId);
     }
-  }
-
-  /** Reload a single job from DB (after update via bot command) */
-  async reloadJob(scheduleId: string): Promise<void> {
-    this.removeJob(scheduleId);
-    const schedule = await this.service.getById(scheduleId);
-    if (schedule && schedule.isEnabled) {
-      this.addJob(schedule);
-    }
-  }
-
-  /** Stop all jobs */
-  stopAll(): void {
-    for (const [, job] of this.jobs) {
-      job.task.stop();
-    }
-    this.jobs.clear();
-    this.logger.info("All scheduled messages stopped");
   }
 
   /** Execute a scheduled message — send to the channel */

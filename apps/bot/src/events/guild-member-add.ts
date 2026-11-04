@@ -2,6 +2,7 @@ import { type GuildMember, EmbedBuilder } from "discord.js";
 import type { BotEvent } from "../types/commands.js";
 import type { BotContext } from "../types/context.js";
 import { fetchGuildTextChannel } from "../utils/guild-channel.js";
+import { idBlockField, userAuthor } from "../utils/log-embeds.js";
 
 const event: BotEvent<"guildMemberAdd"> = {
   name: "guildMemberAdd",
@@ -59,18 +60,12 @@ const event: BotEvent<"guildMemberAdd"> = {
       const guildId = member.guild.id;
       const embed = new EmbedBuilder()
         .setColor(0x43b581)
-        .setAuthor({
-          name: member.user.tag,
-          iconURL: member.user.displayAvatarURL(),
-        })
+        .setAuthor(userAuthor(member.user))
         .setTitle("Member Joined")
         .addFields(
           { name: "User", value: `<@${member.id}>` },
           { name: "Account Created", value: `<t:${Math.floor(member.user.createdTimestamp / 1000)}:R>`, inline: true },
-          {
-            name: "ID",
-            value: `\`\`\`js\nUser: ${member.id}\nGuild: ${guildId}\n\`\`\``,
-          },
+          idBlockField([`User: ${member.id}`, `Guild: ${guildId}`]),
         )
         .setThumbnail(member.user.displayAvatarURL())
         .setTimestamp();

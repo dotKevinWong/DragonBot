@@ -4,12 +4,12 @@
  */
 
 /** XP required to go from level (N-1) to level N. */
-export function xpForLevel(level: number): number {
+function xpForLevel(level: number): number {
   return 5 * level * level + 50 * level + 100;
 }
 
 /** Total cumulative XP required to reach a given level from 0. */
-export function totalXpForLevel(level: number): number {
+function totalXpForLevel(level: number): number {
   let total = 0;
   for (let i = 1; i <= level; i++) {
     total += xpForLevel(i);

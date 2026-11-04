@@ -1,5 +1,6 @@
 import { type Client } from "discord.js";
 import type { Logger } from "pino";
+import type { BirthdayRow } from "../repositories/birthday.repository.js";
 import type { BirthdayService } from "../services/birthday.service.js";
 import type { GuildService } from "../services/guild.service.js";
 import { fetchGuildTextChannel } from "../utils/guild-channel.js";
@@ -25,6 +26,9 @@ export class BirthdayChecker {
     const log = this.logger.child({ component: "birthday-checker" });
 
     const allGuilds = this.guildService.getAllCached();
+    // Today's birthdays by date, read at most once per date in this run. Guilds in different time zones can be on
+    // different dates.
+    const birthdaysByDate = new Map<string, Promise<BirthdayRow[]>>();
 
     for (const guild of allGuilds) {
       if (!guild.isBirthdayEnabled || !guild.birthdayChannelId) continue;
@@ -73,6 +77,7 @@ export class BirthdayChecker {
           month,
           day,
           log,
+          birthdaysByDate,
         );
 
         // Persist the check date so restarts don't re-announce
@@ -81,6 +86,27 @@ export class BirthdayChecker {
         log.error({ err, guildId: guild.guildId }, "Birthday check failed for guild, continuing to next");
       }
     }
+  }
+
+  /**
+   * The users whose birthday is on this date, shared through `birthdaysByDate` with the other guilds in the same run.
+   * A failed read isn't kept, so the next guild on that date reads again.
+   */
+  private todaysBirthdays(
+    month: number,
+    day: number,
+    birthdaysByDate?: Map<string, Promise<BirthdayRow[]>>,
+  ): Promise<BirthdayRow[]> {
+    if (!birthdaysByDate) return this.birthdayService.getTodaysBirthdays(month, day);
+    const key = `${month}-${day}`;
+    const cached = birthdaysByDate.get(key);
+    if (cached) return cached;
+    const read = this.birthdayService.getTodaysBirthdays(month, day);
+    birthdaysByDate.set(key, read);
+    read.catch(() => {
+      if (birthdaysByDate.get(key) === read) birthdaysByDate.delete(key);
+    });
+    return read;
   }
 
   /** Remove the birthday role from everyone who currently has it. */
@@ -116,11 +142,12 @@ export class BirthdayChecker {
     month: number,
     day: number,
     log: Logger,
+    birthdaysByDate?: Map<string, Promise<BirthdayRow[]>>,
   ): Promise<void> {
     const guildLog = log.child({ guildId });
 
     try {
-      const birthdayUsers = await this.birthdayService.getTodaysBirthdays(month, day);
+      const birthdayUsers = await this.todaysBirthdays(month, day, birthdaysByDate);
       if (birthdayUsers.length === 0) return;
 
       const discordGuild = this.client.guilds.cache.get(guildId);

@@ -19,6 +19,7 @@ import {
   type MemberStatus,
 } from "../services/honeypot.service.js";
 import type { BotContext } from "../types/context.js";
+import { describeError, hasErrorCode } from "../utils/discord-errors.js";
 import { buildMessageDeletedEmbed } from "../utils/message-log.js";
 
 /** A member with any of these is staff, and the honeypot leaves them alone. Nothing else counts. */
@@ -56,15 +57,6 @@ type Outcome =
 /** A moderator has to act on these outcomes, so they go out as notices, and pino logs them at warn. */
 function needsAttention(outcome: Outcome): boolean {
   return outcome.kind === "failed" || outcome.kind === "unconfirmed" || outcome.kind === "still_banned";
-}
-
-function hasErrorCode(err: unknown, code: number): boolean {
-  return err instanceof DiscordAPIError && err.code === code;
-}
-
-/** Why a Discord call failed. */
-function describeError(err: unknown): string {
-  return err instanceof Error && err.message ? err.message : String(err);
 }
 
 function cutReason(reason: string): string {

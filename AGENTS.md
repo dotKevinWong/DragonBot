@@ -39,14 +39,15 @@ pnpm-workspace.yaml       Lists apps/*, packages/* and scripts (no scripts/ dire
 
 | Path | Contents |
 |---|---|
-| `index.ts` | Composition root: loads repo-root `.env`, config, logger, DB, repositories, services, `BotContext`, loader, `clientReady` startup, 4-hour timer, shutdown and crash handlers |
+| `index.ts` | Composition root: loads repo-root `.env`, config, logger, DB, calls `buildServices`, builds `BotContext`, loader, registers `clientReady` → `runStartup`, login, then `installProcessHandlers` |
+| `bootstrap/` | `services.ts` (`buildServices`: external clients, repositories, services, in the original order), `startup.ts` (`runStartup`: the `clientReady` sequence, with injectable `StartupFactories`), `periodic-sync.ts` (`startPeriodicSync`: the 4-hour timer), `process-handlers.ts` (`installProcessHandlers`: SIGTERM/SIGINT shutdown and one shared crash handler) |
 | `client.ts` | `createClient()`: intents and partials |
 | `config.ts` | zod env schema, `loadConfig()`, `AppConfig` |
 | `loader.ts` | `loadCommands`, `registerCommands`, `loadEvents`, `bindInteractionHandler` |
 | `types/` | `commands.ts` (`BotCommand`, `BotEvent`), `context.ts` (`BotContext`), `errors.ts` (`ErrorCode`, `AppError`) |
 | `commands/` | 19 slash commands, one default export per file (inventory below) |
 | `events/` | 11 gateway event handlers, one default export per file (inventory below) |
-| `services/` | 13 services (business logic; table below) |
+| `services/` | 14 services (business logic; table below) |
 | `repositories/` | 11 thin Drizzle wrappers (table below) |
 | `lib/` | Long-lived runtime components and SDK wrappers (table below) |
 | `utils/` | Stateless helpers plus `TTLCache` (table below) |
@@ -58,22 +59,23 @@ pnpm-workspace.yaml       Lists apps/*, packages/* and scripts (no scripts/ dire
 | `auth.service.ts` | `generateToken` (32 random bytes hex, 5-min expiry) for `/login`. The web app exchanges the token and signs the JWT | AuthRepository |
 | `birthday.service.ts` | Set/remove/view birthdays, upcoming list, formatting, announcement template (`{user}`, `{age}`) | BirthdayRepository |
 | `guild-admin.service.ts` | `hasPermission` (`*` or scope), `hasAnyPermission`, manager CRUD validated against `PERMISSION_SCOPES`; 24h `TTLCache` | GuildAdminRepository |
-| `guild.service.ts` | Guild settings cache: `hydrateAll`, `getSettings` (cache), `getSettingsFresh` (DB), `ensureGuild`, `updateSettings`, `getAllCached`, `getAllBanSyncGuilds`, `disableBanSync`, `setHoneypotWarning`, `invalidateCache`; 24h `TTLCache` with a write-mark guard so an in-flight read can't re-cache a stale row | GuildRepository |
+| `guild.service.ts` | Guild settings cache: `hydrateAll`, `getSettings` (cache), `getSettingsFresh` (DB), `ensureGuild`, `updateSettings`, `getAllCached`, `getAllBanSyncGuilds`, `disableBanSync`, `setHoneypotWarning`, `invalidateCache`; 24h `TTLCache` with a write-mark guard so an in-flight read can't re-cache a stale row. Concurrent `getSettings` misses for a server share one DB read, unless a write happened since it began or `hydrateAll` started after it (a full reload drops the in-flight list). A missing row is not cached | GuildRepository |
 | `honeypot.service.ts` | In-memory honeypot state (cases, action records, late window, own-deletion marks, per-key mutex, shutdown drain) plus pure helpers (`decideHoneypot`, `isHoneypotReason`, `isHoneypotKickReason`, `warningText`) and constants. No Discord calls | TTLCache |
 | `logging.service.ts` | `shouldLog(guildId, LogEventType)`, `sendLogEmbed`, `sendNotice` (ignores event toggles) | GuildService, **discord.js**, `utils/guild-channel` |
 | `moderation.service.ts` | `syncBan`: ban in every other ban-sync server; disables sync on Unknown Guild | GuildService, **discord.js** |
-| `scheduled-message.service.ts` | `listByGuild`, `getAllEnabled`, `getById`, `updateLastRun`, `cronToHuman` (create/update/toggle/remove/`parseIntervalToCron` exist but are unused: the web writes the table) | ScheduledMessageRepository |
+| `scheduled-message.service.ts` | `listByGuild`, `getAllEnabled`, `getById`, `updateLastRun`, `cronToHuman` (the bot's only cron formatter; the web has its own). Read-only: the web writes the table | ScheduledMessageRepository |
 | `suggestion.service.ts` | `create` (checks `is_suggestions_enabled`) | SuggestionRepository, GuildRepository |
 | `user.service.ts` | `getProfile`, `isVerified` (24h cache), `markBanned` | UserRepository |
 | `verification.service.ts` | `initiateVerification`, `confirmVerification`; domain allowlist, 6 hex-char code (`randomBytes(3)`), 30-min expiry, timing-safe compare | VerificationRepository, GuildRepository, UserRepository, EmailService |
-| `xp.service.ts` | In-memory XP engine: `hydrate`, `processMessage`, `getRank`, `getLeaderboard`, snapshot/reset/rehydrate for archives, `flush` (500-row chunks, `isFlushing` guard; a per-entry `version` keeps entries changed mid-flush dirty). `processMessage` returns null until `hydrate()` finishes | XpRepository, logger, `utils/xp` |
+| `xp.service.ts` | In-memory XP engine (a flat `guildId:discordId` map plus a per-guild index of the same entries, so guild reads don't scan other guilds; ties keep insertion order): `hydrate`, `processMessage`, `getRank`, `getLeaderboard`, snapshot/reset/rehydrate for archives, `flush` (500-row chunks, `isFlushing` guard; a per-entry `version` keeps entries changed mid-flush dirty). `processMessage` returns null until `hydrate()` finishes | XpRepository, logger, `utils/xp` |
+| `xp-archive.service.ts` | XP archive workflows for `/xp-admin`: `resetAll` (flush, snapshot, archive, zero, flush), `restore` (validate the ID and archive data, flush, auto-archive current XP, rehydrate, flush, mark restored), `listRecent` (10 newest), `available`. Returns tagged results; the command owns the replies and passes its child logger in. The repository is optional in the constructor (as `xpArchiveRepo` was on `BotContext`), so the "Archive system not available." replies stay at the same steps | XpService, XpArchiveRepository |
 | `youtube.service.ts` | `fetchRecentVideos` (Atom RSS via fast-xml-parser, 10s timeout), `buildNotificationMessage` | none |
 
-**Repositories** (one per table unless noted): `auth` (auth_tokens), `birthday` (users birth columns), `guild-admin` (guild_admins), `guild` (guilds), `scheduled-message` (scheduled_messages), `suggestion` (suggestions), `user` (users), `verification` (verifications), `xp` (user_xp, `batchUpsert` uses `sql\`excluded.*\``), `xp-archive` (xp_archives, no service), `youtube` (youtube_subscriptions joined to guilds, no service).
+**Repositories** (one per table unless noted): `auth` (auth_tokens), `birthday` (users birth columns), `guild-admin` (guild_admins), `guild` (guilds), `scheduled-message` (scheduled_messages), `suggestion` (suggestions), `user` (users), `verification` (verifications), `xp` (user_xp, `batchUpsert` uses `sql\`excluded.*\``), `xp-archive` (xp_archives, used by XpArchiveService), `youtube` (youtube_subscriptions joined to guilds, no service).
 
-**lib/:** `logger.ts` (pino factory; reads `LOG_LEVEL`, `NODE_ENV` directly), `email.ts` (`EmailService`, Resend), `openai.ts` (`AIService.ask(question, systemPrompt?)`), `scheduler.ts` (`SchedulerManager`: node-cron jobs; `loadAll`, `reload()` full diff with no guild argument, `testJob`, `activeJobCount`), `webhook-server.ts` (`startWebhookServer`, `node:http`), `birthday-checker.ts` (`BirthdayChecker.check()`), `youtube-checker.ts` (`YouTubeChecker.check()`), `honeypot-enforcer.ts` (`handleHoneypotMessage`, `deleteLateMessage`, `sweepCachedMessages`), `honeypot-warning.ts` (`HoneypotWarningSync` `sync`/`syncAll`, `buildWarningEmbed`).
+**lib/:** `logger.ts` (pino factory; reads `LOG_LEVEL`, `NODE_ENV` directly), `email.ts` (`EmailService`, Resend), `openai.ts` (`AIService.ask(question, systemPrompt?)`), `scheduler.ts` (`SchedulerManager`: node-cron jobs; `loadAll`, `reload()` full diff with no guild argument, `testJob`, `activeJobCount`), `webhook-server.ts` (`startWebhookServer`, `node:http`), `birthday-checker.ts` (`BirthdayChecker.check()`; reads each date's birthdays once per run), `youtube-checker.ts` (`YouTubeChecker.check()`), `honeypot-enforcer.ts` (`handleHoneypotMessage`, `deleteLateMessage`, `sweepCachedMessages`), `honeypot-warning.ts` (`HoneypotWarningSync` `sync`/`syncAll`, `buildWarningEmbed`).
 
-**utils/:** `audit-log.ts` (`findRecentAuditLogEntry`, `resolveBanReason`, `normalizeReason`: kick/ban detection), `cache.ts` (`TTLCache<T>`, 60s unref'd cleanup), `embeds.ts` (`successEmbed`, `errorEmbed`, `infoEmbed`, `logEmbed`, colours), `guild-channel.ts` (`fetchGuildTextChannel`; see Security), `intro-validator.ts` (`validateIntroduction`, 5 gates), `message-log.ts` (`buildMessageDeletedEmbed`, shared by `messageDelete` and the honeypot), `xp.ts` (MEE6 level math, `progressBar`). `course.ts` and `time.ts` have no importers.
+**utils/:** `audit-log.ts` (`findRecentAuditLogEntry`, `resolveBanReason`, `normalizeReason`: kick/ban detection), `cache.ts` (`TTLCache<T>`, 60s unref'd cleanup), `command-helpers.ts` (`replyServerOnly`, `replyAppErrorOrFail(interaction, err, logUnhandled)`: deferred-command replies; each command keeps its own guild check and log call), `birthday.ts` (`MONTH_NAMES`, `nextBirthdayYear`), `discord-errors.ts` (`hasErrorCode`, `describeError`; used by the honeypot modules and `moderation.service`), `embeds.ts` (`successEmbed`, `errorEmbed`, `infoEmbed`, colours), `guild-channel.ts` (`fetchGuildTextChannel`; see Security), `intro-validator.ts` (`validateIntroduction`, 5 gates), `log-embeds.ts` (log-channel embed pieces: `idBlockField` for the `js` ID code block, `messageIdBlockField` for the message variant that ends with a blank line, `userAuthor`, `userAuthorOrUnknown`), `message-log.ts` (`buildMessageDeletedEmbed`, shared by `messageDelete` and the honeypot), `verification-role.ts` (`addVerificationRole`: fetch member and add the role, throws; used by `/verify code` and `/verify sync`), `xp.ts` (MEE6 level math, `progressBar`).
 
 ### apps/web/src
 
@@ -112,7 +114,7 @@ The package ships TypeScript source (`exports` point at `src/*.ts`; web uses `tr
 
 ### Tests
 
-`apps/bot/tests/` mirrors `src/`: `commands/` (suggest), `db/` (honeypot helpers and `FIELD_SCOPE_MAP`), `events/` (guild-ban-add, guild-create, guild-member-add, guild-member-remove, message-delete, message-delete-bulk), `lib/` (birthday-checker, honeypot-enforcer, honeypot-warning, scheduler, youtube-checker), `services/` (guild, honeypot, logging, moderation), `utils/` (audit-log, guild-channel, intro-validator, message-log). No vitest config file. No web or repository tests.
+`apps/bot/tests/` mirrors `src/`: `config.test.ts` and `index.test.ts` (composition root wiring, clientReady order, shutdown and crash handlers) (top level), `bootstrap/` (startup), `commands/` (admin, command-guards (server-only guard and AppError catch across commands), next-birthdays, suggest, verify, xp-admin), `db/` (contracts, db-logger, honeypot helpers, permissions (`FIELD_SCOPE_MAP`, scope helpers), schema indexes), `events/` (guild-ban-add, guild-create, guild-member-add, guild-member-remove, guild-member-update, log-embed-snapshots (every log embed pinned by `toMatchSnapshot`, in `events/__snapshots__/`), message-create, message-create.flow, message-delete, message-delete-bulk, message-update), `lib/` (birthday-checker, honeypot-enforcer, honeypot-warning, scheduler, scheduler.reload, webhook-server, youtube-checker), `services/` (auth, birthday, guild, guild-admin, honeypot, logging, moderation, scheduled-message cronToHuman, xp, xp-archive), `types/` (errors), `utils/` (audit-log, cache, command-helpers, discord-errors, embeds, guild-channel, intro-validator, log-embeds, message-log, verification-role). No vitest config file in `apps/bot`. No bot repository tests. Web tests live separately in `apps/web/tests/`.
 
 ## Commands
 
@@ -142,7 +144,7 @@ Command / Event Handler    (thin controller — parse input, call service, forma
       Drizzle ORM          (schema, typed queries)
 
 lib/   long-lived components (checkers, scheduler, webhook server, honeypot enforcer/warning, SDK wrappers).
-       Wired in index.ts, take services by constructor, may import discord.js.
+       Wired in bootstrap/ (startup.ts), take services by constructor, may import discord.js.
 utils/ stateless helpers, imported by any layer; never import services or lib.
 ```
 
@@ -153,7 +155,6 @@ utils/ stateless helpers, imported by any layer; never import services or lib.
 - This separation means services are testable without mocking Discord.
 
 **Known exceptions (existing code, not precedent):**
-- `commands/xp-admin.ts` calls `ctx.xpArchiveRepo` (an `XpArchiveRepository` on `BotContext`; there is no archive service).
 - `lib/youtube-checker.ts` uses `YouTubeRepository` directly (YouTubeService has no repository).
 - `services/logging.service.ts` and `services/moderation.service.ts` import `discord.js` (they send embeds and bans).
 - `SuggestionService` and `VerificationService` read `GuildRepository` directly, bypassing the GuildService cache.
@@ -161,13 +162,11 @@ utils/ stateless helpers, imported by any layer; never import services or lib.
 
 ### BotContext (Dependency Injection)
 
-Built once in `index.ts` (manual constructor wiring, no container) and passed to every command and event handler. From `apps/bot/src/types/context.ts`:
+Built once in `index.ts` from `bootstrap/services.ts` (manual constructor wiring, no container) and passed to every command and event handler. From `apps/bot/src/types/context.ts`:
 
 ```typescript
 export interface BotContext {
-  db: DrizzleClient;
   logger: Logger;
-  email: EmailService;
   ai: AIService;
   config: AppConfig;
   services: {
@@ -181,21 +180,18 @@ export interface BotContext {
     guildAdmin: GuildAdminService;
     scheduledMessage: ScheduledMessageService;
     xp: XpService;
+    xpArchive: XpArchiveService;
     birthday: BirthdayService;
     youtube: YouTubeService;
     honeypot: HoneypotService;
   };
-  xpArchiveRepo?: XpArchiveRepository;
   scheduler?: SchedulerManager;
-  birthdayChecker?: BirthdayChecker;
-  youtubeChecker?: YouTubeChecker;
   honeypotWarning?: HoneypotWarningSync;
 }
 ```
 
-- `xpArchiveRepo` is set at construction (optional only in the type).
-- `scheduler`, `birthdayChecker`, `youtubeChecker`, `honeypotWarning` are assigned inside `clientReady`; events firing before then must optional-chain them.
-- `ctx.db` is not read outside `index.ts`; code reaches the DB through services.
+- `scheduler` and `honeypotWarning` are assigned inside `clientReady` (`runStartup`); events firing before then must optional-chain them.
+- There is no `ctx.db` or `ctx.email`: code reaches the DB through services, and `EmailService` reaches `VerificationService` by constructor. The birthday and YouTube checkers are held by the 4-hour timer, not by `ctx`.
 
 ### Command Interface
 
@@ -230,7 +226,7 @@ Argument types are not checked against `ClientEvents`; each handler declares its
 - **Discovery:** `readdir` of `src/commands/` and `src/events/` (flat, no recursion); every `.ts` or `.js` file is dynamically imported. A file without `default.data.name` (commands) or `default.name` (events) is skipped with a warning. New files are picked up on restart.
 - **Registration:** `registerCommands` PUTs every command **globally** (`Routes.applicationCommands`) on every startup. There is no guild-scoped registration.
 - **Auto-defer:** for chat-input commands, unless `skipDefer`, the loader calls `deferReply()` (ephemeral if `command.ephemeral`) before `execute()`. Deferred handlers must use `interaction.editReply()`; `reply()` after a defer throws `InteractionAlreadyReplied`. `skipDefer` commands (`latex`, `mod`, `poll`, `roll`) must use `interaction.reply()`.
-- **Command errors:** caught centrally, logged with a child logger `{command, guildId, userId}`, and the user gets the plain ephemeral text "Something went wrong. Please try again later." (via `followUp` if replied/deferred, else `reply`). The loader does not inspect `AppError`; commands map `AppError` to `errorEmbed(err.message)` themselves.
+- **Command errors:** caught centrally, logged with a child logger `{command, guildId, userId}`, and the user gets the plain ephemeral text "Something went wrong. Please try again later." (via `followUp` if replied/deferred, else `reply`). The loader does not inspect `AppError`; commands map `AppError` to `errorEmbed(err.message)` themselves (most through `replyAppErrorOrFail` in `utils/command-helpers.ts`; `/admin` rethrows non-`AppError`s to the loader).
 - **Events:** each handler is wrapped in `safeHandler`, which calls `event.execute(...args, ctx)` with **ctx appended as the last argument** and logs rejected promises ("Unhandled error in event handler"). `once` uses `client.once`.
 - **Modals:** submits route by `customId.split(":")[0]` to `command.modal`; errors are only logged. No command implements `modal` today. Buttons, select menus, autocomplete and context menus are not routed.
 
@@ -259,12 +255,12 @@ export class AppError extends Error {
 | `guild-create.ts` | guildCreate | `ensureGuild`; `honeypotWarning.sync` | — |
 | `guild-delete.ts` | guildDelete | Outage (`available === false`): warn only. Removed: `disableBanSync` | — |
 | `guild-member-add.ts` | guildMemberAdd | Verification role sync, welcome message, DM welcome, "Member Joined" log | `member_join` |
-| `guild-member-remove.ts` | guildMemberRemove | Honeypot record check; kick detection (record or audit log); "Member Left"/"Member Kicked" and a separate "Kick" log | `member_leave`, `kick` |
+| `guild-member-remove.ts` | guildMemberRemove | Honeypot record check (first, before any await); kick detection (record or audit log, read only if `member_leave` or `kick` is logged); "Member Left"/"Member Kicked" and a separate "Kick" log | `member_leave`, `kick` |
 | `guild-member-update.ts` | guildMemberUpdate | Role and nickname change logs | `role_change`, `nickname_change` |
-| `message-create.ts` | messageCreate | Ignores bots and DMs; honeypot (`handleHoneypotMessage`), late-message deletion, intro gate, then XP and level-up embed | — |
+| `message-create.ts` | messageCreate | Ignores bots and DMs; honeypot (`handleHoneypotMessage`), late-message deletion, intro gate (`runIntroGate`; a rejected intro ends the pipeline, so it earns no XP), then XP and level-up embed (`awardXp`) | — |
 | `message-delete.ts` | messageDelete | Skips own/honeypot deletions; resyncs a deleted honeypot warning; deleted-message log | `message_delete` |
 | `message-delete-bulk.ts` | messageDeleteBulk | Resyncs the honeypot warning if it was purged | — |
-| `message-update.ts` | messageUpdate | Edited-message log | `message_edit` |
+| `message-update.ts` | messageUpdate | Edited-message log; checks `shouldLog` before fetching an uncached message | `message_edit` |
 | `voice-state-update.ts` | voiceStateUpdate | Join/leave/switch log | `voice_activity` |
 
 Settings come from the GuildService cache (`getSettings`), except the honeypot paths that re-read the DB (`getSettingsFresh`).
@@ -274,7 +270,7 @@ Settings come from the GuildService cache (`getSettings`), except the honeypot p
 | Command | Subcommands | Defer | Permission enforced | Notes |
 |---|---|---|---|---|
 | `/admin` | view-settings, managers-add/remove/list/update, reload | ephemeral | Handler: Manage Server, else `managers` scope (managers-*) or any scope (view-settings, reload). Non-Manage-Server callers grant only scopes they hold; `*` only by `*` holders | Read-only for settings; reload rehydrates guilds, scheduler, honeypot warning |
-| `/xp-admin` | flush, reset, status, reset-all, restore, archives | ephemeral | Handler: Manage Server or `xp` scope; reset-all and restore also need Administrator | Flush has a 5-min process-wide cooldown; uses `ctx.xpArchiveRepo` |
+| `/xp-admin` | flush, reset, status, reset-all, restore, archives | ephemeral | Handler: Manage Server or `xp` scope; reset-all and restore also need Administrator | Flush has a 5-min process-wide cooldown; archive workflows in `XpArchiveService` |
 | `/schedule` | list, test | ephemeral | Discord default: Manage Server only | Create/edit/delete are web-only |
 | `/mod` | talk, react | skipDefer | Discord default: Kick Members only | |
 | `/verify` | email, code, sync | ephemeral | — | |
@@ -291,17 +287,17 @@ Settings come from the GuildService cache (`getSettings`), except the honeypot p
 
 `/help` (`commands/help.ts`) and the README command table are **hand-maintained**; neither is generated from the loaded commands.
 
-### Startup Sequence (`index.ts`)
+### Startup Sequence (`index.ts`, `bootstrap/`)
 
 1. `dotenv` loads the repo-root `.env`; `loadConfig()` (zod; exits on invalid); `createLogger()`.
-2. `createBotClient(DATABASE_URL)`; `EmailService`, `AIService`; repositories; services; `BotContext`.
+2. `createBotClient(DATABASE_URL)`; `buildServices` (`EmailService`, `AIService`; repositories; services); `BotContext`.
 3. `createClient()`; `loadCommands` → `registerCommands` (global REST PUT) → `loadEvents` → `bindInteractionHandler`.
-4. `client.login()`, then SIGTERM/SIGINT/crash handlers are registered.
-5. `clientReady` (once), in order: `guildService.hydrateAll()` → `xpService.hydrate()` → `SchedulerManager.loadAll()` (→ `ctx.scheduler`) → create `BirthdayChecker`, `YouTubeChecker` and `HoneypotWarningSync` → start the webhook server **only if `BOT_WEBHOOK_SECRET` is set** → start the 4-hour timer → `birthdayChecker.check()` → `youtubeChecker.check()` → `honeypotWarning.syncAll()` (last, in its own try/catch). The webhook server and timer start before the slow checks so dashboard reloads work during startup.
+4. `client.login()`, then SIGTERM/SIGINT/crash handlers are registered (`installProcessHandlers`).
+5. `clientReady` (once, `runStartup`), in order: `guildService.hydrateAll()` → `xpService.hydrate()` → `SchedulerManager.loadAll()` (→ `ctx.scheduler`) → create `BirthdayChecker`, `YouTubeChecker` and `HoneypotWarningSync` → start the webhook server **only if `BOT_WEBHOOK_SECRET` is set** → start the 4-hour timer → `birthdayChecker.check()` → `youtubeChecker.check()` → `honeypotWarning.syncAll()` (last, in its own try/catch). The webhook server and timer start before the slow checks so dashboard reloads work during startup.
 
 A rejection elsewhere in `clientReady` reaches the `unhandledRejection` handler, which flushes XP and exits 1.
 
-**4-hour sync timer** (one `setInterval`, unref'd): `xpService.flush()` → `guildService.hydrateAll()` → `scheduler.reload()` → `birthdayChecker.check()` → `youtubeChecker.check()` (one try/catch), then `honeypotWarning.syncAll()` in its own try/catch. Birthdays and YouTube have no timer of their own.
+**4-hour sync timer** (`startPeriodicSync`; one `setInterval`, unref'd): `xpService.flush()` → `guildService.hydrateAll()` → `scheduler.reload()` → `birthdayChecker.check()` → `youtubeChecker.check()` (one try/catch), then `honeypotWarning.syncAll()` in its own try/catch. Birthdays and YouTube have no timer of their own.
 
 **Shutdown** (SIGTERM/SIGINT): 8-second hard-exit deadline → `honeypotService.drain(5000)` → `client.destroy()` → `xpService.flush()` → exit 0. `uncaughtException` / `unhandledRejection`: flush XP, exit 1.
 
@@ -491,7 +487,7 @@ MEE6-style XP with in-memory caching to minimize DB writes (Neon charges for com
 - **Message XP:** Random XP per message (`xp_min`–`xp_max`), per-user cooldown, excluded channels/roles. All in-memory — zero DB writes per message.
 - **Level-up:** Announces in `xp_levelup_channel_id` if set
 - **`/rank`, `/leaderboard`:** Served entirely from memory
-- **Flush:** the 4-hour sync timer calls `xpService.flush()` (dirty entries only, 500-row chunks, `isFlushing` guard). `XpService.startFlushTimer` exists but is not called. `/xp-admin flush` has its own 5-minute process-wide cooldown (`lastFlushAt` in `commands/xp-admin.ts`).
+- **Flush:** the 4-hour sync timer calls `xpService.flush()` (dirty entries only, 500-row chunks, `isFlushing` guard); there is no other periodic flush. `/xp-admin flush` has its own 5-minute process-wide cooldown (`lastFlushAt` in `commands/xp-admin.ts`).
 - **Graceful shutdown:** SIGTERM/SIGINT and crash handlers flush before exit
 - **Archives (backup/restore):** `/xp-admin reset-all` archives current XP state to `xp_archives` (jsonb snapshot) before zeroing (in memory; the DB catches up on flush). `/xp-admin restore <archive_id>` auto-archives current state first (undo is always possible), then restores. `/xp-admin archives` lists the 10 most recent snapshots.
 - **Public leaderboard:** `/api/leaderboard/[guildId]` serves leaderboard data without auth.
@@ -545,7 +541,7 @@ RSS-based YouTube upload notifications managed entirely via the web dashboard. N
 
 ### Audit Logging
 
-Embeds match the original bot: author header with avatar, structured fields, and an ID code block (`js` highlighting) at the bottom. Handlers call `logging.shouldLog(guildId, key)` then `logging.sendLogEmbed(...)` for the nine `LogEventType` keys listed under the guilds table. A kick can produce two entries (`member_leave` "Member Kicked" and `kick`).
+Embeds match the original bot: author header with avatar, structured fields, and an ID code block (`js` highlighting) at the bottom, built with `utils/log-embeds.ts`. Handlers call `logging.shouldLog(guildId, key)` then `logging.sendLogEmbed(...)` for the nine `LogEventType` keys listed under the guilds table. A kick can produce two entries (`member_leave` "Member Kicked" and `kick`).
 
 ### Verification
 
@@ -630,7 +626,7 @@ When modifying this codebase, AI coding assistants must **never**:
 - `const` over `let`, never `var`
 - Drizzle query builder for all DB access — no raw SQL (the `sql\`excluded.*\`` fragments in `XpRepository.batchUpsert` are the existing exception)
 - All interaction replies with sensitive info (tokens, codes) must be **ephemeral**
-- Embed colors: success `0x43b581`, error `0xff0000`, info `0xffcc00`, log `0x5865f2` (`utils/embeds.ts`)
+- Embed colors: success `0x43b581`, error `0xff0000`, info `0xffcc00` (`utils/embeds.ts`); `0x5865f2` (blurple) is used inline by `/help`, `/poll`, `/rank` and as the default scheduled-message embed colour
 - File naming: kebab-case (`guild-member-add.ts`, `user.service.ts`)
 - One export per file for commands and events
 - All function parameters and return types must be explicitly typed — no `any`
@@ -645,7 +641,7 @@ When modifying this codebase, AI coding assistants must **never**:
 1. **Schema** — Add table/columns to `packages/db/src/schema.ts`, run `db:push` (before shipping code that reads them)
 2. **Repository** — Create `apps/bot/src/repositories/my-feature.repository.ts` (thin Drizzle wrapper)
 3. **Service** — Create `apps/bot/src/services/my-feature.service.ts` (business logic, throws `AppError`)
-4. **Wire up** — Add to `BotContext` in `types/context.ts`, instantiate in `index.ts`
+4. **Wire up** — Add to `BotContext` in `types/context.ts`, instantiate in `bootstrap/services.ts`
 5. **Command** — Create `apps/bot/src/commands/my-feature.ts` (auto-discovered on restart and registered globally), then add it by hand to `/help` (`commands/help.ts`) and the README command table
 6. **Events** — Create `apps/bot/src/events/my-event.ts` if needed (auto-discovered; add an intent in `client.ts` if the event needs one)
 7. **Web API** — Add routes to `apps/web/src/app/api/...`; new guild settings fields also need an entry in `FIELD_SCOPE_MAP` and `guildSettingsUpdateSchema`

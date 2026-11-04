@@ -13,6 +13,12 @@ export class GuildService {
   private writeCount = 0;
   private lastWriteByGuild = new Map<string, number>();
 
+  /**
+   * getSettings reads in flight, by server, with the write mark each began at. A cache miss joins the read in flight
+   * for its server instead of starting another, unless a write to the server happened since that read began.
+   */
+  private inflight = new Map<string, { readStart: number; promise: Promise<GuildRow | null> }>();
+
   constructor(private repo: GuildRepository) {}
 
   /** Drops a server's cached row after a write to it, and records the write mark. */
@@ -29,8 +35,12 @@ export class GuildService {
   /**
    * Load ALL guild settings into cache at startup. After this, getSettings() never hits DB. A row written while the
    * read was in flight stays out of the cache, and the next read of it goes to the database.
+   *
+   * A full reload may follow a dashboard write, so a getSettings miss after it starts must not join a read that began
+   * before it. Dropping the in-flight list only stops sharing; it never adds a read, and it leaves the cache alone.
    */
   async hydrateAll(): Promise<number> {
+    this.inflight.clear();
     const readStart = this.writeCount;
     const allGuilds = await this.repo.findAll();
     for (const guild of allGuilds) {
@@ -43,14 +53,32 @@ export class GuildService {
     const cached = this.cache.get(guildId);
     if (cached !== undefined) return cached;
 
+    // Share a read already in flight for this server, unless a write since it began means it may hold an old row
+    const pending = this.inflight.get(guildId);
+    if (pending && !this.writtenSince(guildId, pending.readStart)) return await pending.promise;
+
     // Fallback to DB only if not hydrated yet (e.g., during startup race)
     const readStart = this.writeCount;
-    const settings = await this.repo.findByGuildId(guildId);
-    // Returned either way, but cached only when no write to this server happened during the read.
-    if (settings && !this.writtenSince(guildId, readStart)) {
-      this.cache.set(guildId, settings);
-    }
-    return settings;
+    const release = () => {
+      // A newer read may have replaced this one after a write; leave that one in place
+      if (this.inflight.get(guildId)?.promise === promise) this.inflight.delete(guildId);
+    };
+    const promise: Promise<GuildRow | null> = this.repo.findByGuildId(guildId).then(
+      (settings) => {
+        release();
+        // Returned either way, but cached only when no write to this server happened during the read.
+        if (settings && !this.writtenSince(guildId, readStart)) {
+          this.cache.set(guildId, settings);
+        }
+        return settings;
+      },
+      (err: unknown) => {
+        release();
+        throw err;
+      },
+    );
+    this.inflight.set(guildId, { readStart, promise });
+    return await promise;
   }
 
   /**
