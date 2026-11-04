@@ -464,6 +464,36 @@ describe("handleRepeatSpamMessage", () => {
     expect(guild.bans.remove).toHaveBeenCalled();
   });
 
+  it("forgets the account's copies when the case is already open, so later copies cost no further reads", async () => {
+    const trapArmed = {
+      isHoneypotEnabled: true,
+      honeypotChannelId: "trap",
+      honeypotAction: "ban",
+      honeypotWarningChannelId: "trap",
+      honeypotWarningMessageId: "100",
+    };
+    const { row, guild, ctx, guildService, postIn } = setup({ row: trapArmed });
+    const banHeld = deferred();
+    guild.members.ban.mockImplementation(async () => {
+      await banHeld.promise;
+      return "u1";
+    });
+
+    const trap = handleHoneypotMessage(asMessage(fakeMessage(guild, { channelId: "trap" })), row, ctx);
+    await flush();
+    const readsBefore = guildService.getSettingsFresh.mock.calls.length;
+
+    const results = await postIn(["a", "b", "c", "d", "e"]);
+
+    // The third copy reaches the count and finds the trap's case; the account's copies are then forgotten, so the
+    // next two start counting again and stay below it.
+    expect(results).toEqual(["not_caught", "not_caught", "handled", "not_caught", "not_caught"]);
+    expect(guildService.getSettingsFresh.mock.calls.length - readsBefore).toBe(1);
+
+    banHeld.resolve();
+    await trap;
+  });
+
   it("deletes the copies itself when the kick fails, then sends a notice naming the check", async () => {
     const { guild, logging, run } = setup();
     guild.members.ban.mockRejectedValue(missingPermissions());

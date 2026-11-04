@@ -34,6 +34,8 @@ export interface RepeatTrigger {
 
 const CUSTOM_EMOJI = /<a?:\w+:\d+>/g;
 const LINK = /https?:\/\/\S+/g;
+/** A keycap emoji (1️⃣, #️⃣, *️⃣). It goes whole: its digit would otherwise survive the punctuation strip. */
+const KEYCAP = /[0-9#*]\uFE0F?\u20E3/gu;
 const LINK_PLACEHOLDER = "__link__";
 
 /**
@@ -53,6 +55,7 @@ export function compareKey(content: string, mode: RepeatSpamMatchMode): CompareK
         .toLowerCase()
         .replace(CUSTOM_EMOJI, " ")
         .replace(LINK, ` ${LINK_PLACEHOLDER} `)
+        .replace(KEYCAP, " ")
         .replace(/[^\p{L}\p{N}_\s]/gu, "")
         .replace(/\s+/g, " ")
         .trim();
@@ -69,8 +72,8 @@ export function isSameMessage(a: CompareKey, b: CompareKey): boolean {
 }
 
 /**
- * The floor is the same at every level and is checked on its own stripped text: links, custom emoji, other emoji and
- * punctuation removed, leaving only letters, digits and single spaces. Characters are counted as code points, never
+ * The floor is the same at every level and is checked on its own stripped text: links, custom emoji, keycap emoji,
+ * other emoji and punctuation removed, leaving only letters, digits and single spaces. Characters are counted as code points, never
  * UTF-16 units.
  */
 function passesFloor(base: string): boolean {
@@ -78,6 +81,7 @@ function passesFloor(base: string): boolean {
     .toLowerCase()
     .replace(CUSTOM_EMOJI, " ")
     .replace(LINK, " ")
+    .replace(KEYCAP, " ")
     .replace(/[^\p{L}\p{N}\s]/gu, "")
     .replace(/\s+/g, " ")
     .trim();
@@ -142,7 +146,8 @@ export class RepeatSpamService {
 
     const copies = recent.filter((entry) => isSameMessage(entry.key, key)).map((entry) => entry.copy);
     const channelIds = [...new Set(copies.map((c) => c.channelId))];
-    return channelIds.length >= channelCount ? { copies, channelIds } : null;
+    // At least 2, so a misconfigured count can never catch an account on its first post.
+    return channelIds.length >= Math.max(2, channelCount) ? { copies, channelIds } : null;
   }
 
   /** Drops every tracked message of the account. */

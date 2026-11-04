@@ -81,6 +81,19 @@ describe("compareKey and isSameMessage", () => {
     }
   });
 
+  it("never counts keycap emoji, which would otherwise leave their digit behind", () => {
+    const keycaps = "1️⃣ 2️⃣ 3️⃣ 1️⃣ 2️⃣ 3️⃣ 1️⃣ 2️⃣ 3️⃣ 1️⃣ 2️⃣";
+    const bare = "1⃣ 2⃣ 3⃣ #️⃣ *️⃣ 1⃣ 2⃣ 3⃣ #⃣ *⃣ 1⃣";
+    for (const mode of REPEAT_SPAM_MATCH_MODES) {
+      expect(compareKey(keycaps, mode)).toBeNull();
+      expect(compareKey(bare, mode)).toBeNull();
+      // Plain digits are still text.
+      expect(compareKey("call 555 1234 or 555 9876 now", mode)).not.toBeNull();
+    }
+    // Under similar, a keycap is no word: these differ only by their keycaps.
+    expect(same("Free nitro for everyone today 1️⃣", "Free nitro for everyone today 2️⃣", "similar")).toBe(true);
+  });
+
   it("keeps a hash, not the text, for word-for-word levels", () => {
     const key = compareKey(SENTENCE, "ignore_case")!;
     expect(key.mode).toBe("ignore_case");
@@ -156,6 +169,14 @@ describe("RepeatSpamService", () => {
     post(service, "b", "m2", T0 + 1, 4);
     expect(post(service, "c", "m3", T0 + 2, 4)).toBeNull();
     expect(post(service, "d", "m4", T0 + 3, 4)?.channelIds).toEqual(["a", "b", "c", "d"]);
+  });
+
+  it("never triggers on the first post, even when given a count below 2", () => {
+    for (const count of [1, 0, -1]) {
+      const service = new RepeatSpamService();
+      expect(post(service, "a", "m1", T0, count)).toBeNull();
+      expect(post(service, "b", "m2", T0 + 1, count)).not.toBeNull();
+    }
   });
 
   it("keeps accounts and servers apart", () => {

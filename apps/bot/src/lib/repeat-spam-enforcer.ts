@@ -113,7 +113,9 @@ async function handleTriggered(
   const honeypot = ctx.services.honeypot;
   const started = honeypot.beginCase(guildId, userId, message.createdTimestamp);
   if (started.kind === "same_case") {
-    // The account's case is already being handled, by this check or the channel trap: only the message goes.
+    // The account's case is already being handled, by this check or the channel trap: only the message goes. Its
+    // copies are forgotten too, so further copies must reach the count again before the next lookup and re-read.
+    repeatSpam.forget(guildId, userId);
     await deleteQuietly(message, ctx);
     return "handled";
   }
