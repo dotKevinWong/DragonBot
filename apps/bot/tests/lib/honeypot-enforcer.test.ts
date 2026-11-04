@@ -12,7 +12,8 @@ import {
 } from "discord.js";
 import type { Logger } from "pino";
 import type { GuildRow } from "@dragonbot/db";
-import { deleteLateMessage, handleHoneypotMessage, sweepCachedMessages } from "../../src/lib/honeypot-enforcer.js";
+import { deleteLateMessage, handleHoneypotMessage } from "../../src/lib/honeypot-enforcer.js";
+import { sweepCachedMessages } from "../../src/lib/honeypot-removal.js";
 import {
   HoneypotService,
   IN_FLIGHT_TIMEOUT_MS,
@@ -591,7 +592,7 @@ describe("handleHoneypotMessage", () => {
     expect(guild.bans.remove).toHaveBeenCalledTimes(2);
     const stuck = "Kicked, but the unban failed: Internal Server Error. They are still banned and need a manual unban.";
     expect(loggedActions(logging)).toEqual([stuck]);
-    expect(notices(logging)).toEqual([`<@u1> (u1) posted in the honeypot <#trap>. ${stuck}`]);
+    expect(notices(logging)).toEqual([`<@u1> (u1) posted in the channel trap <#trap>. ${stuck}`]);
     // The ban was never confirmed: no late window, and no sweep.
     expect(honeypot.isWithinLateWindow("g1", "u1")).toBe(false);
     await vi.advanceTimersByTimeAsync(SWEEP_DELAY_MS);
@@ -665,7 +666,7 @@ describe("handleHoneypotMessage", () => {
     expect(loggedActions(logging)).toEqual(["Message deleted only. Couldn't check membership, so nobody was removed."]);
     expect(logging.sendNotice).toHaveBeenCalledTimes(1);
     expect(notices(logging)).toEqual([
-      "<@u1> (u1) posted in the honeypot <#trap>. " +
+      "<@u1> (u1) posted in the channel trap <#trap>. " +
         "Message deleted only. Couldn't check membership (Service Unavailable), so nobody was removed.",
     ]);
   });
@@ -958,7 +959,7 @@ describe("handleHoneypotMessage", () => {
         expect(loggedActions(logging)).toEqual(logsDeletes ? [text] : []);
         // The notice goes out whatever the log toggles: the account is still in the server.
         expect(notices(logging)).toEqual(
-          [text, ...deleteNotices].map((notice) => `<@u1> (u1) posted in the honeypot <#trap>. ${notice}`),
+          [text, ...deleteNotices].map((notice) => `<@u1> (u1) posted in the channel trap <#trap>. ${notice}`),
         );
         // The case ended straight away, before the delete, so the account's next post is a new case.
         expect(endCase).toHaveBeenCalledTimes(1);
@@ -1174,7 +1175,7 @@ describe("handleHoneypotMessage", () => {
         const titles = logEntries(logging).map((entry) => entry.title);
         expect(titles).toEqual(logsDeletes ? ["Honeypot Message (Delete Failed)"] : []);
         expect(loggedActions(logging)).toEqual(logsDeletes ? [logged] : []);
-        expect(notices(logging)).toEqual([`<@u1> (u1) posted in the honeypot <#trap>. ${notice}`]);
+        expect(notices(logging)).toEqual([`<@u1> (u1) posted in the channel trap <#trap>. ${notice}`]);
       }
     }
   });
@@ -1249,7 +1250,7 @@ describe("handleHoneypotMessage", () => {
       // The delete failure notice comes last, and it is the only one that carries the delete's reason.
       const deleteNotice = "Couldn't delete the message: Missing Permissions. Delete it by hand if it's still there.";
       expect(notices(logging)).toEqual(
-        [...caseNotices, deleteNotice].map((text) => `<@u1> (u1) posted in the honeypot <#trap>. ${text}`),
+        [...caseNotices, deleteNotice].map((text) => `<@u1> (u1) posted in the channel trap <#trap>. ${text}`),
       );
     }
   });
@@ -1264,7 +1265,7 @@ describe("handleHoneypotMessage", () => {
     await expect(run(message)).resolves.toBe("handled");
 
     expect(notices(logging)).toEqual([
-      `<@u1> (u1) posted in the honeypot <#trap>. Couldn't delete the message: ${"x".repeat(200)}. Delete it by hand if it's still there.`,
+      `<@u1> (u1) posted in the channel trap <#trap>. Couldn't delete the message: ${"x".repeat(200)}. Delete it by hand if it's still there.`,
     ]);
   });
 
@@ -1313,7 +1314,7 @@ describe("handleHoneypotMessage", () => {
         "Couldn't delete a honeypot message",
       );
       const triggerNotice =
-        "<@u1> (u1) posted in the honeypot <#trap>. Couldn't delete the message: Missing Permissions. " +
+        "<@u1> (u1) posted in the channel trap <#trap>. Couldn't delete the message: Missing Permissions. " +
         "Delete it by hand if it's still there.";
       expect(notices(logging)).toEqual(triggerDeleteError ? [triggerNotice] : []);
     }
