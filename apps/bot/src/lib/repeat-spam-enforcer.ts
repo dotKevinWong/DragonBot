@@ -3,12 +3,11 @@ import { isRepeatSpamArmed, type GuildRow } from "@dragonbot/db";
 import { decideHoneypot, isRealPost, repeatRemovalReason } from "../services/honeypot.service.js";
 import { compareKey, type CompareKey, type RepeatTrigger, type TrackedCopy } from "../services/repeat-spam.service.js";
 import type { BotContext } from "../types/context.js";
+import { describeError, hasErrorCode } from "../utils/discord-errors.js";
 import { buildRepeatSpamEmbed } from "../utils/message-log.js";
 import {
   STAFF_PERMISSIONS,
   cutReason,
-  describeError,
-  hasErrorCode,
   isVerified,
   lookUpAuthor,
   memberStatus,

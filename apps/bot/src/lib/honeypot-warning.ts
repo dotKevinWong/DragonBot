@@ -1,5 +1,4 @@
 import {
-  DiscordAPIError,
   EmbedBuilder,
   RESTJSONErrorCodes,
   type Client,
@@ -13,6 +12,7 @@ import type { GuildService } from "../services/guild.service.js";
 import { WARNING_COLOR, WARNING_TITLE, warningText, type HoneypotService } from "../services/honeypot.service.js";
 import type { LoggingService } from "../services/logging.service.js";
 import { TTLCache } from "../utils/cache.js";
+import { describeError, hasErrorCode } from "../utils/discord-errors.js";
 
 /** A notice with the same text goes to a server's log channel at most once in this many seconds. */
 const NOTICE_REPEAT_SECONDS = 86_400;
@@ -44,7 +44,7 @@ interface StoredWarning {
 type PinResult = "pinned" | "gone" | "failed";
 
 /** What a sync's caller knows that the sync should act on. */
-export interface SyncOptions {
+interface SyncOptions {
   /** Forget the server's repost budget first: an admin asked for the warning again. */
   resetBudget?: boolean;
   /** A message a delete handler saw deleted. If it's the stored warning, the sync takes it as gone without fetching it. */
@@ -74,10 +74,6 @@ function armingRefusal(guild: Guild, row: GuildRow, channelId: string): string |
   return null;
 }
 
-function hasErrorCode(err: unknown, ...codes: number[]): boolean {
-  return err instanceof DiscordAPIError && typeof err.code === "number" && codes.includes(err.code);
-}
-
 /** Unknown Message or Unknown Channel: the warning, or its channel, no longer exists. */
 function isGone(err: unknown): boolean {
   return hasErrorCode(err, RESTJSONErrorCodes.UnknownMessage, RESTJSONErrorCodes.UnknownChannel);
@@ -85,8 +81,7 @@ function isGone(err: unknown): boolean {
 
 /** Why a Discord call failed, short enough for a notice. */
 function reasonFor(err: unknown): string {
-  const reason = err instanceof Error && err.message ? err.message : String(err);
-  return reason.slice(0, 200);
+  return describeError(err).slice(0, 200);
 }
 
 /**

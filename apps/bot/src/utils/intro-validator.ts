@@ -1,4 +1,4 @@
-export interface IntroValidationResult {
+interface IntroValidationResult {
   valid: boolean;
   reason?: string;
 }

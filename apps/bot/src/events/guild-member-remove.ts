@@ -2,6 +2,7 @@ import { AuditLogEvent, EmbedBuilder, type GuildMember, type PartialGuildMember 
 import type { BotEvent } from "../types/commands.js";
 import type { BotContext } from "../types/context.js";
 import { findRecentAuditLogEntry, normalizeReason } from "../utils/audit-log.js";
+import { idBlockField, userAuthorOrUnknown } from "../utils/log-embeds.js";
 
 const event: BotEvent<"guildMemberRemove"> = {
   name: "guildMemberRemove",
@@ -14,6 +15,9 @@ const event: BotEvent<"guildMemberRemove"> = {
 
     const guildId = member.guild.id;
     const log = ctx.logger.child({ event: "guildMemberRemove", guildId, userId: member.id });
+
+    // Checked before any Discord call, so servers that log neither leaves nor kicks make none.
+    const leaveOn = await ctx.services.logging.shouldLog(guildId, "member_leave");
 
     // Determine if kick, ban, or voluntary leave
     let action = "left";
@@ -28,6 +32,8 @@ const event: BotEvent<"guildMemberRemove"> = {
       executorId = member.client.user.id;
       reason = hp.reason;
     } else {
+      // The audit log only feeds the two log entries below. With both off, there's nothing to look it up for.
+      if (!leaveOn && !(await ctx.services.logging.shouldLog(guildId, "kick"))) return;
       const kickLog = await findRecentAuditLogEntry(member.guild, AuditLogEvent.MemberKick, member.id);
       if (kickLog) {
         action = "kicked";
@@ -38,13 +44,10 @@ const event: BotEvent<"guildMemberRemove"> = {
     }
 
     // Log member_leave
-    if (await ctx.services.logging.shouldLog(guildId, "member_leave")) {
+    if (leaveOn) {
       const embed = new EmbedBuilder()
         .setColor(0xff0000)
-        .setAuthor({
-          name: member.user?.tag ?? "Unknown",
-          iconURL: member.user?.displayAvatarURL() ?? undefined,
-        })
+        .setAuthor(userAuthorOrUnknown(member.user))
         .setTitle(action === "kicked" ? "Member Kicked" : "Member Left")
         .addFields({ name: "User", value: `<@${member.id}>` });
 
@@ -55,10 +58,7 @@ const event: BotEvent<"guildMemberRemove"> = {
         );
       }
 
-      embed.addFields({
-        name: "ID",
-        value: `\`\`\`js\nUser: ${member.id}\nGuild: ${guildId}\n\`\`\``,
-      });
+      embed.addFields(idBlockField([`User: ${member.id}`, `Guild: ${guildId}`]));
       embed.setThumbnail(member.user?.displayAvatarURL() ?? null);
       embed.setTimestamp();
 
@@ -69,19 +69,13 @@ const event: BotEvent<"guildMemberRemove"> = {
     if (action === "kicked" && await ctx.services.logging.shouldLog(guildId, "kick")) {
       const embed = new EmbedBuilder()
         .setColor(0xff6600)
-        .setAuthor({
-          name: member.user?.tag ?? "Unknown",
-          iconURL: member.user?.displayAvatarURL() ?? undefined,
-        })
+        .setAuthor(userAuthorOrUnknown(member.user))
         .setTitle("Kick")
         .addFields(
           { name: "User", value: `<@${member.id}>` },
           { name: "Kicked by", value: `<@${executorId}> (${executor})` },
           { name: "Reason", value: reason ?? "No reason provided" },
-          {
-            name: "ID",
-            value: `\`\`\`js\nUser: ${member.id}\nModerator: ${executorId ?? "Unknown"}\nGuild: ${guildId}\n\`\`\``,
-          },
+          idBlockField([`User: ${member.id}`, `Moderator: ${executorId ?? "Unknown"}`, `Guild: ${guildId}`]),
         )
         .setTimestamp();
 

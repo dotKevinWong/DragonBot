@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useState, useMemo } from "react";
+import { FIELD_LABEL_CLASS, TEXT_INPUT_CLASS, SELECT_CLASS } from "@/lib/form-classes";
+import { redirectIfUnauthorized } from "@/lib/client-fetch";
 
 interface Profile {
   name: string | null;
@@ -74,11 +76,11 @@ function Input({
 }) {
   return (
     <div>
-      <label className="block text-xs font-semibold text-dc-text-secondary uppercase tracking-wide mb-1.5">
+      <label className={FIELD_LABEL_CLASS}>
         {label}
       </label>
       <input
-        className="w-full px-3 py-2 bg-dc-input border border-dc-border rounded-md text-dc-text-primary text-sm outline-none focus:border-dc-accent transition-colors"
+        className={TEXT_INPUT_CLASS}
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
@@ -102,11 +104,11 @@ function Select({
 }) {
   return (
     <div>
-      <label className="block text-xs font-semibold text-dc-text-secondary uppercase tracking-wide mb-1.5">
+      <label className={FIELD_LABEL_CLASS}>
         {label}
       </label>
       <select
-        className="w-full px-3 py-2 bg-dc-input border border-dc-border rounded-md text-dc-text-primary text-sm outline-none focus:border-dc-accent transition-colors cursor-pointer"
+        className={SELECT_CLASS}
         value={value}
         onChange={(e) => onChange(e.target.value)}
       >
@@ -134,10 +136,7 @@ export default function ProfilePage() {
   useEffect(() => {
     fetch("/api/profile", { credentials: "same-origin" })
       .then((res) => {
-        if (res.status === 401) {
-          window.location.href = "/";
-          return null;
-        }
+        if (redirectIfUnauthorized(res)) return null;
         return res.json();
       })
       .then((data) => {
@@ -246,7 +245,7 @@ export default function ProfilePage() {
       {/* Description */}
       <div className="bg-dc-bg-secondary border border-dc-border rounded-lg p-5 mb-4">
         <h2 className="text-sm font-semibold text-dc-text-primary mb-4">About You</h2>
-        <label className="block text-xs font-semibold text-dc-text-secondary uppercase tracking-wide mb-1.5">
+        <label className={FIELD_LABEL_CLASS}>
           Description
         </label>
         <textarea
@@ -273,9 +272,9 @@ export default function ProfilePage() {
         <p className="text-xs text-dc-text-muted mb-3">Your birthday is shared across all servers that have birthday announcements enabled. Year is optional.</p>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           <div>
-            <label className="block text-xs font-semibold text-dc-text-secondary uppercase tracking-wide mb-1.5">Month</label>
+            <label className={FIELD_LABEL_CLASS}>Month</label>
             <select
-              className="w-full px-3 py-2 bg-dc-input border border-dc-border rounded-md text-dc-text-primary text-sm outline-none focus:border-dc-accent transition-colors cursor-pointer"
+              className={SELECT_CLASS}
               value={profile.birthMonth ?? ""}
               onChange={(e) => {
                 const month = e.target.value ? Number(e.target.value) : null;
@@ -289,9 +288,9 @@ export default function ProfilePage() {
             </select>
           </div>
           <div>
-            <label className="block text-xs font-semibold text-dc-text-secondary uppercase tracking-wide mb-1.5">Day</label>
+            <label className={FIELD_LABEL_CLASS}>Day</label>
             <select
-              className="w-full px-3 py-2 bg-dc-input border border-dc-border rounded-md text-dc-text-primary text-sm outline-none focus:border-dc-accent transition-colors cursor-pointer"
+              className={SELECT_CLASS}
               value={profile.birthDay ?? ""}
               onChange={(e) => setProfile({ ...profile, birthDay: e.target.value ? Number(e.target.value) : null })}
               disabled={!profile.birthMonth}
@@ -303,10 +302,10 @@ export default function ProfilePage() {
             </select>
           </div>
           <div>
-            <label className="block text-xs font-semibold text-dc-text-secondary uppercase tracking-wide mb-1.5">Year <span className="text-dc-text-muted font-normal normal-case">(optional)</span></label>
+            <label className={FIELD_LABEL_CLASS}>Year <span className="text-dc-text-muted font-normal normal-case">(optional)</span></label>
             <input
               type="number"
-              className="w-full px-3 py-2 bg-dc-input border border-dc-border rounded-md text-dc-text-primary text-sm outline-none focus:border-dc-accent transition-colors"
+              className={TEXT_INPUT_CLASS}
               value={profile.birthYear ?? ""}
               onChange={(e) => setProfile({ ...profile, birthYear: e.target.value ? Number(e.target.value) : null })}
               placeholder="e.g. 1999"

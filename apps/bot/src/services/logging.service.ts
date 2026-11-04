@@ -2,17 +2,7 @@ import { type Client, EmbedBuilder } from "discord.js";
 import type { GuildService } from "./guild.service.js";
 import type { Logger } from "pino";
 import { fetchGuildTextChannel } from "../utils/guild-channel.js";
-
-export type LogEventType =
-  | "member_join"
-  | "member_leave"
-  | "message_delete"
-  | "message_edit"
-  | "role_change"
-  | "nickname_change"
-  | "voice_activity"
-  | "kick"
-  | "ban";
+import type { LogEventType } from "@dragonbot/db";
 
 export class LoggingService {
   constructor(private guildService: GuildService) {}

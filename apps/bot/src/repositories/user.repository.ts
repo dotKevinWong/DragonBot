@@ -53,13 +53,4 @@ export class UserRepository {
       .returning();
     return rows[0] ?? null;
   }
-
-  async updateProfile(discordId: string, profile: Partial<typeof users.$inferInsert>) {
-    const rows = await this.db
-      .update(users)
-      .set({ ...profile, updatedAt: new Date() })
-      .where(eq(users.discordId, discordId))
-      .returning();
-    return rows[0] ?? null;
-  }
 }

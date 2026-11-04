@@ -2,11 +2,10 @@ import { RESTJSONErrorCodes, type Message } from "discord.js";
 import { HONEYPOT_ACTIONS, findHoneypotChannelConflict, type GuildRow, type HoneypotAction } from "@dragonbot/db";
 import { decideHoneypot, isRealPost, removalReason, type HoneypotDecision } from "../services/honeypot.service.js";
 import type { BotContext } from "../types/context.js";
+import { describeError, hasErrorCode } from "../utils/discord-errors.js";
 import { buildMessageDeletedEmbed } from "../utils/message-log.js";
 import {
   cutReason,
-  describeError,
-  hasErrorCode,
   isVerified,
   lookUpAuthor,
   memberStatus,

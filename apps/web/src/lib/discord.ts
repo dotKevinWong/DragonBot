@@ -1,7 +1,10 @@
 import { eq, and } from "drizzle-orm";
 import { guildAdmins } from "@dragonbot/db/schema";
+import { grantsScope } from "@dragonbot/db/permissions";
 import { env } from "./env";
 import { db } from "./db";
+
+const DISCORD_API = "https://discord.com/api/v10";
 
 /** A member as `GET /guilds/{id}/members/{userId}` returns it: no `permissions`, which Discord sends only in interactions. */
 interface DiscordGuildMember {
@@ -20,25 +23,74 @@ interface DiscordGuild {
 interface DiscordUser {
   id: string;
   username: string;
-  discriminator: string;
   avatar: string | null;
   global_name: string | null;
 }
 
-/** Fetch a Discord user's info (avatar, username) */
+/**
+ * Discord lookups shared within ONE request, so a request that checks a guild,
+ * then its membership, then its icon fetches the guild and the member once.
+ * Only successful responses are kept: a failed or rate-limited lookup is made
+ * again, as it would be without the memo. Create one per request with
+ * createDiscordLookupMemo() and never keep it across requests, or permission
+ * changes would be missed.
+ */
+export interface DiscordLookupMemo {
+  guilds: Map<string, DiscordGuild>;
+  /** keyed by `${guildId}:${userId}` */
+  members: Map<string, DiscordGuildMember>;
+}
+
+export function createDiscordLookupMemo(): DiscordLookupMemo {
+  return { guilds: new Map(), members: new Map() };
+}
+
+const memberKey = (guildId: string, userId: string) => `${guildId}:${userId}`;
+
+/**
+ * A Discord CDN image URL. `animated` serves a gif for an `a_` hash; otherwise png.
+ * `id` is the owner of the image (the user or guild id), as the caller gives it.
+ */
+function discordCdnUrl(
+  kind: "avatars" | "icons",
+  id: string,
+  hash: string,
+  options: { size: number; animated: boolean },
+): string {
+  const ext = options.animated && hash.startsWith("a_") ? "gif" : "png";
+  return `https://cdn.discordapp.com/${kind}/${id}/${hash}.${ext}?size=${options.size}`;
+}
+
+/**
+ * GET /users/{id}, with the outcome kept in three kinds the callers treat differently:
+ * a parsed body, a non-ok status, or an error (network failure or unreadable body).
+ */
+async function fetchDiscordUserRaw(
+  userId: string,
+): Promise<{ kind: "ok"; user: DiscordUser } | { kind: "status"; status: number } | { kind: "error" }> {
+  try {
+    const res = await fetch(`${DISCORD_API}/users/${userId}`, {
+      headers: { Authorization: `Bot ${env.DISCORD_API_TOKEN}` },
+    });
+    if (!res.ok) return { kind: "status", status: res.status };
+    return { kind: "ok", user: (await res.json()) as DiscordUser };
+  } catch {
+    return { kind: "error" };
+  }
+}
+
+/** Fetch a Discord user's info (avatar, username). Not cached; null on any failure. */
 export async function getDiscordUser(userId: string): Promise<{
   username: string;
   displayName: string | null;
   avatarUrl: string | null;
 } | null> {
+  const result = await fetchDiscordUserRaw(userId);
+  if (result.kind !== "ok") return null;
   try {
-    const res = await fetch(`https://discord.com/api/v10/users/${userId}`, {
-      headers: { Authorization: `Bot ${env.DISCORD_API_TOKEN}` },
-    });
-    if (!res.ok) return null;
-    const user = (await res.json()) as DiscordUser;
+    const { user } = result;
     const avatarUrl = user.avatar
-      ? `https://cdn.discordapp.com/avatars/${user.id}/${user.avatar}.${user.avatar.startsWith("a_") ? "gif" : "png"}?size=128`
+      ? discordCdnUrl("avatars", user.id, user.avatar, { size: 128, animated: true })
       : null;
     return {
       username: user.username,
@@ -51,15 +103,18 @@ export async function getDiscordUser(userId: string): Promise<{
 }
 
 /** Fetch a guild's icon URL */
-export async function getGuildIconUrl(guildId: string): Promise<string | null> {
+export async function getGuildIconUrl(guildId: string, memo?: DiscordLookupMemo): Promise<string | null> {
   try {
-    const res = await fetch(`https://discord.com/api/v10/guilds/${guildId}`, {
-      headers: { Authorization: `Bot ${env.DISCORD_API_TOKEN}` },
-    });
-    if (!res.ok) return null;
-    const guild = (await res.json()) as DiscordGuild;
+    let guild = memo?.guilds.get(guildId);
+    if (!guild) {
+      const res = await fetch(`${DISCORD_API}/guilds/${guildId}`, {
+        headers: { Authorization: `Bot ${env.DISCORD_API_TOKEN}` },
+      });
+      if (!res.ok) return null;
+      guild = (await res.json()) as DiscordGuild;
+    }
     if (!guild.icon) return null;
-    return `https://cdn.discordapp.com/icons/${guildId}/${guild.icon}.${guild.icon.startsWith("a_") ? "gif" : "png"}?size=128`;
+    return discordCdnUrl("icons", guildId, guild.icon, { size: 128, animated: true });
   } catch {
     return null;
   }
@@ -73,28 +128,34 @@ const MANAGE_GUILD = BigInt(1) << BigInt(5);
  *
  * The member's server-wide permissions are the @everyone role's (its ID is the guild ID) ORed with those of each of
  * their roles; role IDs the guild doesn't list are skipped. A timed-out member keeps only Administrator. Any failed
- * fetch or error refuses access. At most two Discord calls: the guild, then the member (not needed for the owner).
+ * fetch or error refuses access. At most two Discord calls: the guild, then the member (not needed for the owner),
+ * and none for a lookup the request's memo already holds. Never throws.
  */
 async function checkDiscordManageGuild(
   guildId: string,
   userId: string,
+  memo?: DiscordLookupMemo,
 ): Promise<boolean> {
   try {
     const headers = { Authorization: `Bot ${env.DISCORD_API_TOKEN}` };
 
-    const guildRes = await fetch(`https://discord.com/api/v10/guilds/${guildId}`, { headers });
-    if (!guildRes.ok) return false;
-
-    const guild = (await guildRes.json()) as DiscordGuild;
+    let guild = memo?.guilds.get(guildId);
+    if (!guild) {
+      const guildRes = await fetch(`${DISCORD_API}/guilds/${guildId}`, { headers });
+      if (!guildRes.ok) return false;
+      guild = (await guildRes.json()) as DiscordGuild;
+      memo?.guilds.set(guildId, guild);
+    }
     if (guild.owner_id === userId) return true;
 
-    const memberRes = await fetch(
-      `https://discord.com/api/v10/guilds/${guildId}/members/${userId}`,
-      { headers },
-    );
-    if (!memberRes.ok) return false;
+    let member = memo?.members.get(memberKey(guildId, userId));
+    if (!member) {
+      const memberRes = await fetch(`${DISCORD_API}/guilds/${guildId}/members/${userId}`, { headers });
+      if (!memberRes.ok) return false;
+      member = (await memberRes.json()) as DiscordGuildMember;
+      memo?.members.set(memberKey(guildId, userId), member);
+    }
 
-    const member = (await memberRes.json()) as DiscordGuildMember;
     const memberRoleIds = new Set(member.roles);
     let permissions = BigInt(0);
     for (const role of guild.roles) {
@@ -125,51 +186,32 @@ async function checkDiscordManageGuild(
  *
  * @param scope - If provided, checks for a specific permission scope.
  *                If omitted, any guild_admins entry with permissions grants access.
+ * @param memo - Optional request-scoped Discord lookup memo (see DiscordLookupMemo).
  */
 export async function checkGuildPermission(
   guildId: string,
   userId: string,
   scope?: string,
+  memo?: DiscordLookupMemo,
 ): Promise<boolean> {
-  // The server owner, Administrator or Manage Server always grants full access
-  const hasManageGuild = await checkDiscordManageGuild(guildId, userId);
-  if (hasManageGuild) return true;
-
-  // Check custom guild_admins table
-  try {
-    const rows = await db
-      .select()
-      .from(guildAdmins)
-      .where(and(eq(guildAdmins.guildId, guildId), eq(guildAdmins.discordId, userId)))
-      .limit(1);
-
-    const admin = rows[0];
-    if (!admin || admin.permissions.length === 0) return false;
-
-    // Wildcard grants everything
-    if (admin.permissions.includes("*")) return true;
-
-    // No specific scope requested — any permission grants read access
-    if (!scope) return true;
-
-    return admin.permissions.includes(scope);
-  } catch {
-    return false;
-  }
+  return grantsScope(await getUserGuildPermissions(guildId, userId, memo), scope);
 }
 
 /**
  * Get the list of permission scopes a user has for a guild.
  * Returns ["*"] for the server owner, Administrator or Manage Server.
- * Returns empty array if no permissions.
+ * Returns empty array if no permissions, or if the guild_admins lookup fails.
  */
 export async function getUserGuildPermissions(
   guildId: string,
   userId: string,
+  memo?: DiscordLookupMemo,
 ): Promise<string[]> {
-  const hasManageGuild = await checkDiscordManageGuild(guildId, userId);
+  // The server owner, Administrator or Manage Server always grants full access
+  const hasManageGuild = await checkDiscordManageGuild(guildId, userId, memo);
   if (hasManageGuild) return ["*"];
 
+  // Check custom guild_admins table
   try {
     const rows = await db
       .select()
@@ -183,66 +225,100 @@ export async function getUserGuildPermissions(
   }
 }
 
+type ResolvedDiscordUser = { username: string; displayName: string; avatarUrl: string | null };
+
 /** Simple in-memory cache for Discord user lookups (10 min TTL, prevents N+1 API abuse). */
-const userCache = new Map<string, { data: { username: string; displayName: string; avatarUrl: string | null } | null; expiresAt: number }>();
+const userCache = new Map<string, { data: ResolvedDiscordUser | null; expiresAt: number }>();
 const USER_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 
 /** Resolve a Discord user ID to display name + avatar. Cached for 10 minutes. Respects rate limits. */
-export async function resolveDiscordUser(userId: string): Promise<{ username: string; displayName: string; avatarUrl: string | null } | null> {
+export async function resolveDiscordUser(userId: string): Promise<ResolvedDiscordUser | null> {
   const cached = userCache.get(userId);
   if (cached && Date.now() < cached.expiresAt) return cached.data;
 
+  const result = await fetchDiscordUserRaw(userId);
+  // A network error or unreadable body: don't cache, so we can retry later
+  if (result.kind === "error") return null;
+  if (result.kind === "status") {
+    // Rate limited — don't cache the failure so we can retry later
+    if (result.status === 429) return null;
+    userCache.set(userId, { data: null, expiresAt: Date.now() + USER_CACHE_TTL_MS });
+    return null;
+  }
+
+  let data: ResolvedDiscordUser;
   try {
-    const res = await fetch(`https://discord.com/api/v10/users/${userId}`, {
-      headers: { Authorization: `Bot ${env.DISCORD_API_TOKEN}` },
-    });
-    if (res.status === 429) {
-      // Rate limited — don't cache the failure so we can retry later
-      return null;
-    }
-    if (!res.ok) {
-      userCache.set(userId, { data: null, expiresAt: Date.now() + USER_CACHE_TTL_MS });
-      return null;
-    }
-    const user = await res.json() as { id: string; username: string; global_name: string | null; avatar: string | null };
-    const data = {
+    const { user } = result;
+    data = {
       username: user.username,
       displayName: user.global_name ?? user.username,
-      avatarUrl: user.avatar ? `https://cdn.discordapp.com/avatars/${user.id}/${user.avatar}.png?size=64` : null,
+      avatarUrl: user.avatar ? discordCdnUrl("avatars", user.id, user.avatar, { size: 64, animated: false }) : null,
     };
-    userCache.set(userId, { data, expiresAt: Date.now() + USER_CACHE_TTL_MS });
-    return data;
   } catch {
     return null;
   }
+  userCache.set(userId, { data, expiresAt: Date.now() + USER_CACHE_TTL_MS });
+  return data;
+}
+
+/**
+ * Map `items` through `fn` with at most `concurrency` calls in flight, starting them in input order.
+ * Each worker takes the next item as soon as its last call settles, so one slow call holds up only its own
+ * slot. Results come back by index, in input order, whatever order the calls finish in. If `fn` rejects, the
+ * returned promise rejects with that error and no further calls are started; callers should not rely on it.
+ */
+export async function mapWithConcurrency<T, R>(
+  items: readonly T[],
+  concurrency: number,
+  fn: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  // After a rejection no worker starts another call (the serial loops this replaces stopped too)
+  let failed = false;
+  const worker = async () => {
+    while (!failed && next < items.length) {
+      const i = next++;
+      try {
+        results[i] = await fn(items[i]!, i);
+      } catch (err) {
+        failed = true;
+        throw err;
+      }
+    }
+  };
+  // A NaN or non-positive concurrency runs one call at a time rather than none
+  const limit = Number.isNaN(concurrency) ? 1 : Math.max(1, concurrency);
+  const workers = Math.min(limit, items.length);
+  await Promise.all(Array.from({ length: workers }, worker));
+  return results;
 }
 
 /** Resolve multiple Discord user IDs with concurrency control to avoid rate limits. */
 export async function resolveDiscordUsers(
   userIds: string[],
   concurrency = 5,
-): Promise<Map<string, { username: string; displayName: string; avatarUrl: string | null }>> {
-  const results = new Map<string, { username: string; displayName: string; avatarUrl: string | null }>();
-  const queue = [...userIds];
+): Promise<Map<string, ResolvedDiscordUser>> {
+  const results = new Map<string, ResolvedDiscordUser>();
 
-  while (queue.length > 0) {
-    const batch = queue.splice(0, concurrency);
-    const resolved = await Promise.all(
-      batch.map(async (id) => ({ id, data: await resolveDiscordUser(id) })),
-    );
-    for (const { id, data } of resolved) {
-      if (data) results.set(id, data);
-    }
-  }
+  // A sliding pool: never more than `concurrency` lookups in flight (the old fixed waves had the same ceiling)
+  const resolved = await mapWithConcurrency(userIds, concurrency, (id) => resolveDiscordUser(id));
+  // Filled in input order, as the waves did
+  userIds.forEach((id, i) => {
+    const data = resolved[i];
+    if (data) results.set(id, data);
+  });
 
   return results;
 }
 
 /** Check if a user is a member of a guild (regardless of permissions). */
-export async function isGuildMember(guildId: string, userId: string): Promise<boolean> {
+export async function isGuildMember(guildId: string, userId: string, memo?: DiscordLookupMemo): Promise<boolean> {
+  // The memo holds only members Discord returned successfully
+  if (memo?.members.has(memberKey(guildId, userId))) return true;
   try {
     const res = await fetch(
-      `https://discord.com/api/v10/guilds/${guildId}/members/${userId}`,
+      `${DISCORD_API}/guilds/${guildId}/members/${userId}`,
       { headers: { Authorization: `Bot ${env.DISCORD_API_TOKEN}` } },
     );
     return res.ok;

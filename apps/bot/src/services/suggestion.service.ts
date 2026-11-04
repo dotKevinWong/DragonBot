@@ -20,12 +20,4 @@ export class SuggestionService {
     }
     return this.suggestionRepo.create(data);
   }
-
-  async getByGuild(guildId: string) {
-    return this.suggestionRepo.findByGuildId(guildId);
-  }
-
-  async updateStatus(id: string, status: string) {
-    return this.suggestionRepo.updateStatus(id, status);
-  }
 }

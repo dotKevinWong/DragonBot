@@ -1,6 +1,7 @@
-import { DiscordAPIError, RESTJSONErrorCodes, type Client } from "discord.js";
+import { RESTJSONErrorCodes, type Client } from "discord.js";
 import type { GuildService } from "./guild.service.js";
 import type { Logger } from "pino";
+import { hasErrorCode } from "../utils/discord-errors.js";
 
 export class ModerationService {
   constructor(private guildService: GuildService) {}
@@ -24,7 +25,7 @@ export class ModerationService {
         logger.info({ userId, guildId: guildConfig.guildId }, "Ban synced to guild");
       } catch (err) {
         // The bot was removed from this guild (or it was deleted) — stop trying to sync to it
-        if (err instanceof DiscordAPIError && err.code === RESTJSONErrorCodes.UnknownGuild) {
+        if (hasErrorCode(err, RESTJSONErrorCodes.UnknownGuild)) {
           await this.guildService.disableBanSync(guildConfig.guildId);
           logger.info(
             { userId, guildId: guildConfig.guildId },

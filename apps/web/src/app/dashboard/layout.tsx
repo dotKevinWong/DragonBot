@@ -3,6 +3,8 @@
 import { useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
 import Image from "next/image";
+import Link from "next/link";
+import { redirectIfUnauthorized } from "@/lib/client-fetch";
 
 interface GuildInfo {
   guildId: string;
@@ -43,7 +45,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     // Cookie is sent automatically — no need to read localStorage
     fetch("/api/guilds", { credentials: "same-origin" })
       .then(async (res) => {
-        if (res.status === 401) { window.location.href = "/"; return; }
+        if (redirectIfUnauthorized(res)) return;
         if (res.ok) setGuilds(await res.json());
         setLoadingGuilds(false);
       })
@@ -65,7 +67,8 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     <>
       {/* Profile link */}
       <div className="px-2 pt-3 pb-1">
-        <a
+        <Link
+          prefetch={false}
           href="/dashboard/profile"
           className={`flex items-center gap-3 px-3 py-2 rounded-md text-sm transition-colors ${
             pathname === "/dashboard/profile"
@@ -81,7 +84,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             </svg>
           )}
           Profile
-        </a>
+        </Link>
       </div>
 
       {/* Servers — only show section if loading or has servers */}
@@ -110,7 +113,8 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           const isLeaderboard = pathname === `/dashboard/server/${guild.guildId}/leaderboard`;
           return (
             <div key={guild.guildId} className="mt-0.5">
-              <a
+              <Link
+                prefetch={false}
                 href={guild.isAdmin ? `/dashboard/server/${guild.guildId}` : `/dashboard/server/${guild.guildId}/leaderboard`}
                 className={`flex items-center gap-3 px-3 py-2 rounded-md text-sm transition-colors ${
                   isGuildActive
@@ -120,12 +124,13 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               >
                 <GuildIcon name={guild.guildName} iconUrl={guild.iconUrl} />
                 <span className="truncate">{guild.guildName ?? guild.guildId}</span>
-              </a>
+              </Link>
               {isGuildActive && (
                 <div className="mt-1 ml-4 border-l-2 border-dc-border pl-3 space-y-0.5">
                   {guild.isAdmin && (
                     <>
-                      <a
+                      <Link
+                        prefetch={false}
                         href={`/dashboard/server/${guild.guildId}`}
                         className={`block px-3 py-1.5 rounded-md text-sm transition-colors ${
                           isSettings
@@ -134,8 +139,9 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                         }`}
                       >
                         Settings
-                      </a>
-                      <a
+                      </Link>
+                      <Link
+                        prefetch={false}
                         href={`/dashboard/server/${guild.guildId}/schedules`}
                         className={`block px-3 py-1.5 rounded-md text-sm transition-colors ${
                           isSchedules
@@ -144,8 +150,9 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                         }`}
                       >
                         Schedules
-                      </a>
-                      <a
+                      </Link>
+                      <Link
+                        prefetch={false}
                         href={`/dashboard/server/${guild.guildId}/youtube`}
                         className={`block px-3 py-1.5 rounded-md text-sm transition-colors ${
                           isYoutube
@@ -154,8 +161,9 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                         }`}
                       >
                         YouTube
-                      </a>
-                      <a
+                      </Link>
+                      <Link
+                        prefetch={false}
                         href={`/dashboard/server/${guild.guildId}/suggestions`}
                         className={`block px-3 py-1.5 rounded-md text-sm transition-colors ${
                           isSuggestions
@@ -164,10 +172,11 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                         }`}
                       >
                         Suggestions
-                      </a>
+                      </Link>
                     </>
                   )}
-                  <a
+                  <Link
+                    prefetch={false}
                     href={`/dashboard/server/${guild.guildId}/leaderboard`}
                     className={`block px-3 py-1.5 rounded-md text-sm transition-colors ${
                       isLeaderboard
@@ -176,7 +185,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                     }`}
                   >
                     Leaderboard
-                  </a>
+                  </Link>
                 </div>
               )}
             </div>

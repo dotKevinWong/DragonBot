@@ -3,8 +3,7 @@ import crypto from "node:crypto";
 import type { Logger } from "pino";
 import type { GuildService } from "../services/guild.service.js";
 import type { SchedulerManager } from "./scheduler.js";
-
-const SNOWFLAKE_RE = /^[0-9]{17,20}$/;
+import { DISCORD_SNOWFLAKE_RE as SNOWFLAKE_RE } from "@dragonbot/db";
 
 interface WebhookServerOptions {
   port: number;
@@ -44,10 +43,13 @@ export function startWebhookServer(options: WebhookServerOptions): http.Server {
       return;
     }
 
-    // POST /webhook/reload?guildId=xxx — reload a specific guild's settings
+    // POST /webhook/reload?guildId=xxx[&scope=settings] — reload a specific guild's settings.
+    // scope=settings (exactly) says only guild settings changed, so schedules are not reloaded;
+    // no scope, or any other value, reloads schedules too, as callers that send no scope expect.
     if (req.method === "POST" && req.url?.startsWith("/webhook/reload")) {
       const url = new URL(req.url, `http://localhost:${port}`);
       const guildId = url.searchParams.get("guildId");
+      const settingsOnly = url.searchParams.get("scope") === "settings";
 
       // Validate guildId format before processing
       if (guildId && !SNOWFLAKE_RE.test(guildId)) {
@@ -68,8 +70,8 @@ export function startWebhookServer(options: WebhookServerOptions): http.Server {
           log.info("All guild settings reloaded via webhook");
         }
 
-        // Also reload schedules in case those changed
-        const scheduler = getScheduler();
+        // Also reload schedules in case those changed (not needed when only settings changed)
+        const scheduler = settingsOnly ? undefined : getScheduler();
         if (scheduler) {
           await scheduler.reload();
         }

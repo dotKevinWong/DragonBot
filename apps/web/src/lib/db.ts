@@ -3,7 +3,7 @@ import { env } from "./env";
 
 let _db: ReturnType<typeof createServerlessClient> | null = null;
 
-export function getDb() {
+function getDb() {
   if (!_db) {
     _db = createServerlessClient(env.DATABASE_URL);
   }

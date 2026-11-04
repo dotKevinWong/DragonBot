@@ -1,6 +1,7 @@
 import { EmbedBuilder, type VoiceState } from "discord.js";
 import type { BotEvent } from "../types/commands.js";
 import type { BotContext } from "../types/context.js";
+import { idBlockField, userAuthor } from "../utils/log-embeds.js";
 
 const event: BotEvent<"voiceStateUpdate"> = {
   name: "voiceStateUpdate",
@@ -14,10 +15,7 @@ const event: BotEvent<"voiceStateUpdate"> = {
 
     const embed = new EmbedBuilder()
       .setColor(0xffcc00)
-      .setAuthor({
-        name: user.tag,
-        iconURL: user.displayAvatarURL(),
-      });
+      .setAuthor(userAuthor(user));
 
     if (!oldState.channel && newState.channel) {
       // Join
@@ -26,10 +24,7 @@ const event: BotEvent<"voiceStateUpdate"> = {
         .addFields(
           { name: "User", value: `<@${user.id}>` },
           { name: "Channel", value: `<#${newState.channel.id}> (${newState.channel.name})` },
-          {
-            name: "ID",
-            value: `\`\`\`js\nUser: ${user.id}\nChannel: ${newState.channel.id}\nGuild: ${guildId}\n\`\`\``,
-          },
+          idBlockField([`User: ${user.id}`, `Channel: ${newState.channel.id}`, `Guild: ${guildId}`]),
         );
     } else if (oldState.channel && !newState.channel) {
       // Leave
@@ -38,10 +33,7 @@ const event: BotEvent<"voiceStateUpdate"> = {
         .addFields(
           { name: "User", value: `<@${user.id}>` },
           { name: "Channel", value: `<#${oldState.channel.id}> (${oldState.channel.name})` },
-          {
-            name: "ID",
-            value: `\`\`\`js\nUser: ${user.id}\nChannel: ${oldState.channel.id}\nGuild: ${guildId}\n\`\`\``,
-          },
+          idBlockField([`User: ${user.id}`, `Channel: ${oldState.channel.id}`, `Guild: ${guildId}`]),
         );
     } else if (oldState.channel && newState.channel && oldState.channel.id !== newState.channel.id) {
       // Switch
@@ -51,10 +43,12 @@ const event: BotEvent<"voiceStateUpdate"> = {
           { name: "User", value: `<@${user.id}>` },
           { name: "Old Channel", value: `<#${oldState.channel.id}> (${oldState.channel.name})` },
           { name: "New Channel", value: `<#${newState.channel.id}> (${newState.channel.name})` },
-          {
-            name: "ID",
-            value: `\`\`\`js\nUser: ${user.id}\nOld Channel: ${oldState.channel.id}\nNew Channel: ${newState.channel.id}\nGuild: ${guildId}\n\`\`\``,
-          },
+          idBlockField([
+            `User: ${user.id}`,
+            `Old Channel: ${oldState.channel.id}`,
+            `New Channel: ${newState.channel.id}`,
+            `Guild: ${guildId}`,
+          ]),
         );
     } else {
       return; // Mute/deafen changes — skip

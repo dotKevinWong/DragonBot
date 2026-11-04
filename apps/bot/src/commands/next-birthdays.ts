@@ -5,12 +5,9 @@ import {
 } from "discord.js";
 import type { BotContext } from "../types/context.js";
 import type { BotCommand } from "../types/commands.js";
+import { MONTH_NAMES, nextBirthdayYear } from "../utils/birthday.js";
 import { errorEmbed } from "../utils/embeds.js";
-
-const MONTH_NAMES = [
-  "January", "February", "March", "April", "May", "June",
-  "July", "August", "September", "October", "November", "December",
-];
+import { replyServerOnly } from "../utils/command-helpers.js";
 
 const command: BotCommand = {
   data: new SlashCommandBuilder()
@@ -19,7 +16,7 @@ const command: BotCommand = {
 
   async execute(interaction: ChatInputCommandInteraction, ctx: BotContext) {
     if (!interaction.guildId || !interaction.guild) {
-      await interaction.editReply({ embeds: [errorEmbed("This command can only be used in a server.")] });
+      await replyServerOnly(interaction);
       return;
     }
 
@@ -52,11 +49,8 @@ const command: BotCommand = {
       const groups = new Map<string, { dateLabel: string; users: string[] }>();
 
       for (const b of upcoming) {
-        const year = b.daysUntil === 0
-          ? currentYear
-          : (b.month < (now.getMonth() + 1) || (b.month === (now.getMonth() + 1) && b.day < now.getDate()))
-            ? currentYear + 1
-            : currentYear;
+        // The service counted daysUntil from its own clock read, so a birthday it found today stays this year here
+        const year = b.daysUntil === 0 ? currentYear : nextBirthdayYear(b.month, b.day, now);
 
         const monthName = MONTH_NAMES[b.month - 1] ?? "Unknown";
         const dateLabel = `${monthName} ${String(b.day).padStart(2, "0")}, ${year}`;

@@ -1,11 +1,10 @@
 import { NextResponse } from "next/server";
-import { eq } from "drizzle-orm";
-import { guildAdmins } from "@dragonbot/db";
-import { getAuthenticatedUser } from "@/lib/auth";
+import { and, eq } from "drizzle-orm";
+import { guildAdmins } from "@dragonbot/db/schema";
 import { checkGuildPermission } from "@/lib/discord";
 import { env } from "@/lib/env";
 import { db } from "@/lib/db";
-import { DISCORD_SNOWFLAKE_RE } from "@/lib/validators";
+import { authenticateGuildRequest, DISCORD_ROUTE_BODIES } from "@/lib/route-guard";
 
 interface DiscordChannel {
   id: string;
@@ -30,29 +29,39 @@ const GUILD_CATEGORY = 4;
 const GUILD_ANNOUNCEMENT = 5;
 const GUILD_FORUM = 15;
 
+/**
+ * Each id's position, looked up once instead of a find() per comparison.
+ * The first entry for an id wins, as find() did; a missing position stays undefined (sorted as 0).
+ */
+function firstPositions(raw: { id: string; position?: number | null }[]): Map<string, number | null | undefined> {
+  const position = new Map<string, number | null | undefined>();
+  for (const r of raw) {
+    if (!position.has(r.id)) position.set(r.id, r.position);
+  }
+  return position;
+}
+
 export async function GET(
   request: Request,
   { params }: { params: Promise<{ guildId: string }> },
 ) {
-  const discordId = await getAuthenticatedUser(request);
-  if (!discordId) {
-    return NextResponse.json({ error: "Unauthorized", code: "UNAUTHORIZED" }, { status: 401 });
-  }
-
-  const { guildId } = await params;
-
-  if (!DISCORD_SNOWFLAKE_RE.test(guildId)) {
-    return NextResponse.json({ error: "Not found", code: "NOT_FOUND" }, { status: 404 });
-  }
+  const auth = await authenticateGuildRequest(request, params, DISCORD_ROUTE_BODIES);
+  if (!auth.ok) return auth.response;
+  const { discordId, params: { guildId } } = auth;
 
   // Check guild_admins table first (no Discord API call), then fall back to Discord permission
-  const adminRows = await db.select().from(guildAdmins).where(eq(guildAdmins.discordId, discordId)).limit(1);
-  const isCustomAdmin = adminRows.some((r) => r.guildId === guildId);
+  // A row with an empty permission list grants nothing, as in checkGuildPermission.
+  const adminRows = await db
+    .select()
+    .from(guildAdmins)
+    .where(and(eq(guildAdmins.guildId, guildId), eq(guildAdmins.discordId, discordId)))
+    .limit(1);
+  const isCustomAdmin = adminRows.some((r) => r.permissions.length > 0);
 
   if (!isCustomAdmin) {
     const hasPermission = await checkGuildPermission(guildId, discordId);
     if (!hasPermission) {
-      return NextResponse.json({ error: "Forbidden", code: "UNAUTHORIZED" }, { status: 403 });
+      return NextResponse.json(DISCORD_ROUTE_BODIES.forbidden, { status: 403 });
     }
   }
 
@@ -81,11 +90,8 @@ export async function GET(
         channels.push({ id: ch.id, name: ch.name, type });
       }
       // Sort by position, filter out categories
-      channels.sort((a, b) => {
-        const rawA = raw.find((r) => r.id === a.id);
-        const rawB = raw.find((r) => r.id === b.id);
-        return (rawA?.position ?? 0) - (rawB?.position ?? 0);
-      });
+      const position = firstPositions(raw);
+      channels.sort((a, b) => (position.get(a.id) ?? 0) - (position.get(b.id) ?? 0));
     }
 
     const roles: { id: string; name: string; color: string }[] = [];
@@ -96,11 +102,8 @@ export async function GET(
         const color = role.color === 0 ? "#b5bac1" : `#${role.color.toString(16).padStart(6, "0")}`;
         roles.push({ id: role.id, name: role.name, color });
       }
-      roles.sort((a, b) => {
-        const rawA = raw.find((r) => r.id === a.id);
-        const rawB = raw.find((r) => r.id === b.id);
-        return (rawB?.position ?? 0) - (rawA?.position ?? 0); // Higher position = higher in hierarchy
-      });
+      const position = firstPositions(raw);
+      roles.sort((a, b) => (position.get(b.id) ?? 0) - (position.get(a.id) ?? 0)); // Higher position = higher in hierarchy
     }
 
     return NextResponse.json({ channels, roles });

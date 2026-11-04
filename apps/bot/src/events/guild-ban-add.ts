@@ -3,6 +3,7 @@ import { isHoneypotKickReason, isHoneypotReason } from "../services/honeypot.ser
 import type { BotEvent } from "../types/commands.js";
 import type { BotContext } from "../types/context.js";
 import { resolveBanReason } from "../utils/audit-log.js";
+import { idBlockField, userAuthor } from "../utils/log-embeds.js";
 
 const event: BotEvent<"guildBanAdd"> = {
   name: "guildBanAdd",
@@ -30,18 +31,12 @@ const event: BotEvent<"guildBanAdd"> = {
       const guildId = ban.guild.id;
       const embed = new EmbedBuilder()
         .setColor(0xff0000)
-        .setAuthor({
-          name: ban.user.tag,
-          iconURL: ban.user.displayAvatarURL(),
-        })
+        .setAuthor(userAuthor(ban.user))
         .setTitle("Member Banned")
         .addFields(
           { name: "User", value: `<@${ban.user.id}>` },
           { name: "Reason", value: reason ?? "No reason provided" },
-          {
-            name: "ID",
-            value: `\`\`\`js\nUser: ${ban.user.id}\nGuild: ${guildId}\n\`\`\``,
-          },
+          idBlockField([`User: ${ban.user.id}`, `Guild: ${guildId}`]),
         )
         .setThumbnail(ban.user.displayAvatarURL())
         .setTimestamp();

@@ -1,0 +1,620 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`log-channel embeds > Member Banned 1`] = `
+[
+  {
+    "author": {
+      "icon_url": "https://cdn.example/u1.png",
+      "name": "u1#0001",
+      "url": undefined,
+    },
+    "color": 16711680,
+    "fields": [
+      {
+        "name": "User",
+        "value": "<@u1>",
+      },
+      {
+        "name": "Reason",
+        "value": "spam",
+      },
+      {
+        "name": "ID",
+        "value": "\`\`\`js
+User: u1
+Guild: g1
+\`\`\`",
+      },
+    ],
+    "thumbnail": {
+      "url": "https://cdn.example/u1.png",
+    },
+    "title": "Member Banned",
+  },
+]
+`;
+
+exports[`log-channel embeds > Member Joined 1`] = `
+[
+  {
+    "author": {
+      "icon_url": "https://cdn.example/u1.png",
+      "name": "u1#0001",
+      "url": undefined,
+    },
+    "color": 4437377,
+    "fields": [
+      {
+        "name": "User",
+        "value": "<@u1>",
+      },
+      {
+        "inline": true,
+        "name": "Account Created",
+        "value": "<t:1600000000:R>",
+      },
+      {
+        "name": "ID",
+        "value": "\`\`\`js
+User: u1
+Guild: g1
+\`\`\`",
+      },
+    ],
+    "thumbnail": {
+      "url": "https://cdn.example/u1.png",
+    },
+    "title": "Member Joined",
+  },
+]
+`;
+
+exports[`log-channel embeds > Member Kicked and Kick, by a moderator 1`] = `
+[
+  {
+    "author": {
+      "icon_url": "https://cdn.example/u1.png",
+      "name": "u1#0001",
+      "url": undefined,
+    },
+    "color": 16711680,
+    "fields": [
+      {
+        "name": "User",
+        "value": "<@u1>",
+      },
+      {
+        "name": "Kicked by",
+        "value": "<@mod-1> (mod#0001)",
+      },
+      {
+        "name": "Reason",
+        "value": "spam",
+      },
+      {
+        "name": "ID",
+        "value": "\`\`\`js
+User: u1
+Guild: g1
+\`\`\`",
+      },
+    ],
+    "thumbnail": {
+      "url": "https://cdn.example/u1.png",
+    },
+    "title": "Member Kicked",
+  },
+  {
+    "author": {
+      "icon_url": "https://cdn.example/u1.png",
+      "name": "u1#0001",
+      "url": undefined,
+    },
+    "color": 16737792,
+    "fields": [
+      {
+        "name": "User",
+        "value": "<@u1>",
+      },
+      {
+        "name": "Kicked by",
+        "value": "<@mod-1> (mod#0001)",
+      },
+      {
+        "name": "Reason",
+        "value": "spam",
+      },
+      {
+        "name": "ID",
+        "value": "\`\`\`js
+User: u1
+Moderator: mod-1
+Guild: g1
+\`\`\`",
+      },
+    ],
+    "title": "Kick",
+  },
+]
+`;
+
+exports[`log-channel embeds > Member Kicked and Kick, by the honeypot 1`] = `
+[
+  {
+    "author": {
+      "icon_url": "https://cdn.example/u1.png",
+      "name": "u1#0001",
+      "url": undefined,
+    },
+    "color": 16711680,
+    "fields": [
+      {
+        "name": "User",
+        "value": "<@u1>",
+      },
+      {
+        "name": "Kicked by",
+        "value": "<@bot-self> (DragonBot#0001)",
+      },
+      {
+        "name": "Reason",
+        "value": "[Honeypot kick] x",
+      },
+      {
+        "name": "ID",
+        "value": "\`\`\`js
+User: u1
+Guild: g1
+\`\`\`",
+      },
+    ],
+    "thumbnail": {
+      "url": "https://cdn.example/u1.png",
+    },
+    "title": "Member Kicked",
+  },
+  {
+    "author": {
+      "icon_url": "https://cdn.example/u1.png",
+      "name": "u1#0001",
+      "url": undefined,
+    },
+    "color": 16737792,
+    "fields": [
+      {
+        "name": "User",
+        "value": "<@u1>",
+      },
+      {
+        "name": "Kicked by",
+        "value": "<@bot-self> (DragonBot#0001)",
+      },
+      {
+        "name": "Reason",
+        "value": "[Honeypot kick] x",
+      },
+      {
+        "name": "ID",
+        "value": "\`\`\`js
+User: u1
+Moderator: bot-self
+Guild: g1
+\`\`\`",
+      },
+    ],
+    "title": "Kick",
+  },
+]
+`;
+
+exports[`log-channel embeds > Member Kicked and Kick, executor and reason unknown 1`] = `
+[
+  {
+    "author": {
+      "icon_url": "https://cdn.example/u1.png",
+      "name": "u1#0001",
+      "url": undefined,
+    },
+    "color": 16711680,
+    "fields": [
+      {
+        "name": "User",
+        "value": "<@u1>",
+      },
+      {
+        "name": "Kicked by",
+        "value": "<@null> (Unknown)",
+      },
+      {
+        "name": "Reason",
+        "value": "No reason provided",
+      },
+      {
+        "name": "ID",
+        "value": "\`\`\`js
+User: u1
+Guild: g1
+\`\`\`",
+      },
+    ],
+    "thumbnail": {
+      "url": "https://cdn.example/u1.png",
+    },
+    "title": "Member Kicked",
+  },
+  {
+    "author": {
+      "icon_url": "https://cdn.example/u1.png",
+      "name": "u1#0001",
+      "url": undefined,
+    },
+    "color": 16737792,
+    "fields": [
+      {
+        "name": "User",
+        "value": "<@u1>",
+      },
+      {
+        "name": "Kicked by",
+        "value": "<@null> (Unknown)",
+      },
+      {
+        "name": "Reason",
+        "value": "No reason provided",
+      },
+      {
+        "name": "ID",
+        "value": "\`\`\`js
+User: u1
+Moderator: Unknown
+Guild: g1
+\`\`\`",
+      },
+    ],
+    "title": "Kick",
+  },
+]
+`;
+
+exports[`log-channel embeds > Member Left 1`] = `
+[
+  {
+    "author": {
+      "icon_url": "https://cdn.example/u1.png",
+      "name": "u1#0001",
+      "url": undefined,
+    },
+    "color": 16711680,
+    "fields": [
+      {
+        "name": "User",
+        "value": "<@u1>",
+      },
+      {
+        "name": "ID",
+        "value": "\`\`\`js
+User: u1
+Guild: g1
+\`\`\`",
+      },
+    ],
+    "thumbnail": {
+      "url": "https://cdn.example/u1.png",
+    },
+    "title": "Member Left",
+  },
+]
+`;
+
+exports[`log-channel embeds > Member Left, uncached user 1`] = `
+[
+  {
+    "author": {
+      "icon_url": undefined,
+      "name": "Unknown",
+      "url": undefined,
+    },
+    "color": 16711680,
+    "fields": [
+      {
+        "name": "User",
+        "value": "<@u1>",
+      },
+      {
+        "name": "ID",
+        "value": "\`\`\`js
+User: u1
+Guild: g1
+\`\`\`",
+      },
+    ],
+    "thumbnail": undefined,
+    "title": "Member Left",
+  },
+]
+`;
+
+exports[`log-channel embeds > Message Deleted 1`] = `
+[
+  {
+    "author": {
+      "icon_url": "https://cdn.example/u1.png",
+      "name": "u1#0001",
+      "url": undefined,
+    },
+    "color": 16711680,
+    "fields": [
+      {
+        "inline": true,
+        "name": "Author",
+        "value": "<@u1>",
+      },
+      {
+        "inline": true,
+        "name": "Channel",
+        "value": "<#c1>",
+      },
+      {
+        "name": "Content",
+        "value": "after",
+      },
+      {
+        "name": "Reactions",
+        "value": "No reactions",
+      },
+      {
+        "name": "Attachments",
+        "value": "No attachments",
+      },
+      {
+        "name": "Stickers",
+        "value": "No stickers",
+      },
+      {
+        "name": "ID",
+        "value": "\`\`\`js
+User: u1
+Message: m1
+Channel: c1
+Guild: g1
+Created Timestamp: 1700000000000
+Edited Timestamp: 1700000100000
+Nonce: n1
+
+\`\`\`",
+      },
+    ],
+    "title": "Message Deleted",
+  },
+  {
+    "author": {
+      "icon_url": undefined,
+      "name": "Unknown",
+      "url": undefined,
+    },
+    "color": 16711680,
+    "fields": [
+      {
+        "inline": true,
+        "name": "Author",
+        "value": "<@?>",
+      },
+      {
+        "inline": true,
+        "name": "Channel",
+        "value": "<#c1>",
+      },
+      {
+        "name": "Content",
+        "value": "*Content not cached*",
+      },
+      {
+        "name": "Reactions",
+        "value": "No reactions",
+      },
+      {
+        "name": "Attachments",
+        "value": "No attachments",
+      },
+      {
+        "name": "Stickers",
+        "value": "No stickers",
+      },
+      {
+        "name": "ID",
+        "value": "\`\`\`js
+User: Unknown
+Message: m1
+Channel: c1
+Guild: Unknown
+Created Timestamp: 1700000000000
+Edited Timestamp: null
+Nonce: null
+
+\`\`\`",
+      },
+    ],
+    "title": "Message Deleted",
+  },
+]
+`;
+
+exports[`log-channel embeds > Message Edited 1`] = `
+[
+  {
+    "author": {
+      "icon_url": "https://cdn.example/u1.png",
+      "name": "u1#0001",
+      "url": undefined,
+    },
+    "color": 16763904,
+    "fields": [
+      {
+        "inline": true,
+        "name": "Author",
+        "value": "<@u1>",
+      },
+      {
+        "inline": true,
+        "name": "Channel",
+        "value": "<#c1>",
+      },
+      {
+        "name": "Old Content",
+        "value": "before",
+      },
+      {
+        "name": "New Content",
+        "value": "after",
+      },
+      {
+        "name": "ID",
+        "value": "\`\`\`js
+User: u1
+Message: m1
+Channel: c1
+Guild: g1
+Created Timestamp: 1700000000000
+Edited Timestamp: 1700000100000
+Nonce: n1
+
+\`\`\`",
+      },
+    ],
+    "title": "Message Edited",
+  },
+  {
+    "author": {
+      "icon_url": "https://cdn.example/u1.png",
+      "name": "u1#0001",
+      "url": undefined,
+    },
+    "color": 16763904,
+    "fields": [
+      {
+        "inline": true,
+        "name": "Author",
+        "value": "<@u1>",
+      },
+      {
+        "inline": true,
+        "name": "Channel",
+        "value": "<#c1>",
+      },
+      {
+        "name": "Old Content",
+        "value": "*Not cached*",
+      },
+      {
+        "name": "New Content",
+        "value": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      },
+      {
+        "name": "ID",
+        "value": "\`\`\`js
+User: u1
+Message: m1
+Channel: c1
+Guild: g1
+Created Timestamp: 1700000000000
+Edited Timestamp: 1700000100000
+Nonce: null
+
+\`\`\`",
+      },
+    ],
+    "title": "Message Edited",
+  },
+]
+`;
+
+exports[`log-channel embeds > Voice Channel Join, Leave and Switch 1`] = `
+[
+  {
+    "author": {
+      "icon_url": "https://cdn.example/u1.png",
+      "name": "u1#0001",
+      "url": undefined,
+    },
+    "color": 16763904,
+    "fields": [
+      {
+        "name": "User",
+        "value": "<@u1>",
+      },
+      {
+        "name": "Channel",
+        "value": "<#va> (Lounge)",
+      },
+      {
+        "name": "ID",
+        "value": "\`\`\`js
+User: u1
+Channel: va
+Guild: g1
+\`\`\`",
+      },
+    ],
+    "title": "Voice Channel Join",
+  },
+  {
+    "author": {
+      "icon_url": "https://cdn.example/u1.png",
+      "name": "u1#0001",
+      "url": undefined,
+    },
+    "color": 16763904,
+    "fields": [
+      {
+        "name": "User",
+        "value": "<@u1>",
+      },
+      {
+        "name": "Channel",
+        "value": "<#va> (Lounge)",
+      },
+      {
+        "name": "ID",
+        "value": "\`\`\`js
+User: u1
+Channel: va
+Guild: g1
+\`\`\`",
+      },
+    ],
+    "title": "Voice Channel Leave",
+  },
+  {
+    "author": {
+      "icon_url": "https://cdn.example/u1.png",
+      "name": "u1#0001",
+      "url": undefined,
+    },
+    "color": 16763904,
+    "fields": [
+      {
+        "name": "User",
+        "value": "<@u1>",
+      },
+      {
+        "name": "Old Channel",
+        "value": "<#va> (Lounge)",
+      },
+      {
+        "name": "New Channel",
+        "value": "<#vb> (Study)",
+      },
+      {
+        "name": "ID",
+        "value": "\`\`\`js
+User: u1
+Old Channel: va
+New Channel: vb
+Guild: g1
+\`\`\`",
+      },
+    ],
+    "title": "Voice Channel Switch",
+  },
+]
+`;

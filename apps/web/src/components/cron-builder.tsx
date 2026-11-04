@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useCallback } from "react";
+import { describeCron } from "@/lib/cron-text";
 
 const DAYS = [
   { label: "Mon", value: 1 },
@@ -137,62 +138,6 @@ function buildCron(mode: Mode, single: SingleState, multiple: MultipleState, adv
     return `0 0 * * ${dow}`;
   }
   return `0 */${hours} * * ${dow}`;
-}
-
-/** Describe a cron expression in plain English. */
-function describeCron(cron: string): string {
-  const parts = cron.trim().split(/\s+/);
-  if (parts.length !== 5) return cron;
-
-  const [minField, hourField, domField, monthField, dowField] = parts;
-  if (domField !== "*" || monthField !== "*") return cron;
-
-  const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-  const describeDays = (field: string): string => {
-    if (field === "*") return "every day";
-    if (field === "1-5") return "weekdays";
-    if (field === "0,6" || field === "6,0") return "weekends";
-    const nums: number[] = [];
-    for (const p of field.split(",")) {
-      if (p.includes("-")) {
-        const [s, e] = p.split("-").map(Number);
-        for (let i = s; i <= e; i++) nums.push(i);
-      } else {
-        nums.push(Number(p));
-      }
-    }
-    if (nums.length === 7) return "every day";
-    return nums.map((n) => dayNames[n] ?? String(n)).join(", ");
-  };
-
-  const formatTime = (h: number, m: number): string => {
-    const period = h >= 12 ? "PM" : "AM";
-    const h12 = h === 0 ? 12 : h > 12 ? h - 12 : h;
-    return m === 0 ? `${h12} ${period}` : `${h12}:${String(m).padStart(2, "0")} ${period}`;
-  };
-
-  const daysStr = describeDays(dowField);
-
-  // Interval patterns
-  if (minField.startsWith("*/") && hourField === "*") {
-    return `Every ${minField.slice(2)} minutes, ${daysStr}`;
-  }
-  if (minField === "0" && hourField === "*") {
-    return `Every hour, ${daysStr}`;
-  }
-  if (minField === "0" && hourField.startsWith("*/")) {
-    const h = Number(hourField.slice(2));
-    return `Every ${h} hours, ${daysStr}`;
-  }
-
-  // Specific time
-  const min = Number(minField);
-  const hour = Number(hourField);
-  if (!isNaN(min) && !isNaN(hour)) {
-    return `At ${formatTime(hour, min)}, ${daysStr}`;
-  }
-
-  return cron;
 }
 
 export function CronBuilder({ value, onChange }: CronBuilderProps) {

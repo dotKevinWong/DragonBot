@@ -1,5 +1,8 @@
 import { SignJWT, jwtVerify } from "jose";
+import { eq } from "drizzle-orm";
+import { users } from "@dragonbot/db/schema";
 import { env } from "./env";
+import { db } from "./db";
 
 interface JwtPayload {
   discord_id: string;
@@ -37,54 +40,58 @@ export async function signJwt(discordId: string): Promise<string> {
     .sign(secret);
 }
 
+/**
+ * A cookie's raw value from the Cookie header. Kept exactly as before: no URL-decoding,
+ * a value may contain "=", and a repeated name takes the last occurrence.
+ */
+function readCookie(request: Request, name: string): string | undefined {
+  const cookieHeader = request.headers.get("cookie");
+  if (!cookieHeader) return undefined;
+  const cookies = Object.fromEntries(
+    cookieHeader.split(";").map((c) => {
+      const [key, ...val] = c.trim().split("=");
+      return [key, val.join("=")];
+    }),
+  );
+  return cookies[name];
+}
+
+/** The token from an `Authorization: Bearer <token>` header (legacy clients), or null. Case-sensitive prefix. */
+function readBearer(request: Request): string | null {
+  const authHeader = request.headers.get("Authorization");
+  if (authHeader?.startsWith("Bearer ")) return authHeader.slice(7);
+  return null;
+}
+
 /** Extract discord_id from the request — checks httpOnly cookie first, then Authorization header.
- *  Note: This does NOT check jwtInvalidBefore — call getAuthenticatedUser for protected routes. */
+ *  Note: This does NOT check jwtInvalidBefore — call getAuthenticatedUser for protected routes.
+ *  Unlike getJwtPayloadFromRequest, an invalid cookie falls through to the Bearer header (used by logout). */
 export async function getDiscordIdFromRequest(request: Request): Promise<string | null> {
   // 1. Check httpOnly cookie
-  const cookieHeader = request.headers.get("cookie");
-  if (cookieHeader) {
-    const cookies = Object.fromEntries(
-      cookieHeader.split(";").map((c) => {
-        const [key, ...val] = c.trim().split("=");
-        return [key, val.join("=")];
-      }),
-    );
-    const sessionToken = cookies[COOKIE_NAME];
-    if (sessionToken) {
-      const payload = await verifyJwt(sessionToken);
-      if (payload) return payload.discord_id;
-    }
+  const sessionToken = readCookie(request, COOKIE_NAME);
+  if (sessionToken) {
+    const payload = await verifyJwt(sessionToken);
+    if (payload) return payload.discord_id;
   }
 
   // 2. Fallback to Authorization header (for backward compat)
-  const authHeader = request.headers.get("Authorization");
-  if (authHeader?.startsWith("Bearer ")) {
-    const token = authHeader.slice(7);
-    const payload = await verifyJwt(token);
+  const bearer = readBearer(request);
+  if (bearer !== null) {
+    const payload = await verifyJwt(bearer);
     return payload?.discord_id ?? null;
   }
 
   return null;
 }
 
-/** Get the JWT payload (iat) from the request for revocation checking */
+/** Get the JWT payload (iat) from the request for revocation checking.
+ *  A cookie, when present, is final: an invalid one does not fall through to the Bearer header. */
 async function getJwtPayloadFromRequest(request: Request): Promise<JwtPayload | null> {
-  const cookieHeader = request.headers.get("cookie");
-  if (cookieHeader) {
-    const cookies = Object.fromEntries(
-      cookieHeader.split(";").map((c) => {
-        const [key, ...val] = c.trim().split("=");
-        return [key, val.join("=")];
-      }),
-    );
-    const sessionToken = cookies[COOKIE_NAME];
-    if (sessionToken) return verifyJwt(sessionToken);
-  }
+  const sessionToken = readCookie(request, COOKIE_NAME);
+  if (sessionToken) return verifyJwt(sessionToken);
 
-  const authHeader = request.headers.get("Authorization");
-  if (authHeader?.startsWith("Bearer ")) {
-    return verifyJwt(authHeader.slice(7));
-  }
+  const bearer = readBearer(request);
+  if (bearer !== null) return verifyJwt(bearer);
 
   return null;
 }
@@ -98,12 +105,7 @@ export async function getAuthenticatedUser(request: Request): Promise<string | n
   const payload = await getJwtPayloadFromRequest(request);
   if (!payload) return null;
 
-  // Lazy import to avoid circular deps
-  const { db: database } = await import("./db");
-  const { users } = await import("@dragonbot/db/schema");
-  const { eq } = await import("drizzle-orm");
-
-  const rows = await database
+  const rows = await db
     .select({ jwtInvalidBefore: users.jwtInvalidBefore })
     .from(users)
     .where(eq(users.discordId, payload.discord_id))

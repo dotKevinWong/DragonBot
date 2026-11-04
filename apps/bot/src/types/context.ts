@@ -1,7 +1,5 @@
-import type { DrizzleClient } from "@dragonbot/db";
 import type { Logger } from "pino";
 import type { AppConfig } from "../config.js";
-import type { EmailService } from "../lib/email.js";
 import type { AIService } from "../lib/openai.js";
 import type { UserService } from "../services/user.service.js";
 import type { GuildService } from "../services/guild.service.js";
@@ -13,20 +11,16 @@ import type { LoggingService } from "../services/logging.service.js";
 import type { GuildAdminService } from "../services/guild-admin.service.js";
 import type { ScheduledMessageService } from "../services/scheduled-message.service.js";
 import type { XpService } from "../services/xp.service.js";
+import type { XpArchiveService } from "../services/xp-archive.service.js";
 import type { BirthdayService } from "../services/birthday.service.js";
 import type { YouTubeService } from "../services/youtube.service.js";
 import type { HoneypotService } from "../services/honeypot.service.js";
 import type { RepeatSpamService } from "../services/repeat-spam.service.js";
-import type { XpArchiveRepository } from "../repositories/xp-archive.repository.js";
 import type { SchedulerManager } from "../lib/scheduler.js";
-import type { BirthdayChecker } from "../lib/birthday-checker.js";
-import type { YouTubeChecker } from "../lib/youtube-checker.js";
 import type { HoneypotWarningSync } from "../lib/honeypot-warning.js";
 
 export interface BotContext {
-  db: DrizzleClient;
   logger: Logger;
-  email: EmailService;
   ai: AIService;
   config: AppConfig;
   services: {
@@ -40,14 +34,12 @@ export interface BotContext {
     guildAdmin: GuildAdminService;
     scheduledMessage: ScheduledMessageService;
     xp: XpService;
+    xpArchive: XpArchiveService;
     birthday: BirthdayService;
     youtube: YouTubeService;
     honeypot: HoneypotService;
     repeatSpam: RepeatSpamService;
   };
-  xpArchiveRepo?: XpArchiveRepository;
   scheduler?: SchedulerManager;
-  birthdayChecker?: BirthdayChecker;
-  youtubeChecker?: YouTubeChecker;
   honeypotWarning?: HoneypotWarningSync;
 }

@@ -2,6 +2,17 @@
 
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
+import type { DiscordChannel } from "@/lib/guild-settings";
+import {
+  createFeatureItem,
+  deleteFeatureItem,
+  filterTextChannels,
+  loadFeatureList,
+  saveFeatureItemEdit,
+  toggleFeatureItem,
+  type FeatureList,
+} from "@/lib/feature-list";
+import { canWriteScope, missingScopeNote } from "@/lib/viewer-scopes";
 
 interface Subscription {
   id: string;
@@ -14,12 +25,6 @@ interface Subscription {
   isEnabled: boolean;
 }
 
-interface DiscordChannel {
-  id: string;
-  name: string;
-  type: string;
-}
-
 export default function YouTubePage() {
   const params = useParams();
   const guildId = params.guildId as string;
@@ -30,6 +35,9 @@ export default function YouTubePage() {
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [moduleEnabled, setModuleEnabled] = useState(false);
   const [togglingModule, setTogglingModule] = useState(false);
+  // The caller's grants, read from the same guild settings response as the module flag
+  const [viewerScopes, setViewerScopes] = useState<unknown>(undefined);
+  const canWrite = canWriteScope(viewerScopes, "youtube");
 
   const [showForm, setShowForm] = useState(false);
   const [formSearch, setFormSearch] = useState("");
@@ -46,25 +54,30 @@ export default function YouTubePage() {
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
 
   useEffect(() => {
-    Promise.all([
-      fetch(`/api/server/${guildId}/youtube`, { credentials: "same-origin" }),
-      fetch(`/api/server/${guildId}/discord`, { credentials: "same-origin" }),
-      fetch(`/api/server/${guildId}`, { credentials: "same-origin" }),
-    ]).then(async ([ytRes, discordRes, guildRes]) => {
-      if (ytRes.status === 401) { window.location.href = "/"; return; }
-      if (ytRes.status === 403) { setError("No permission."); setLoading(false); return; }
-      if (ytRes.ok) setSubs(await ytRes.json());
-      if (discordRes.ok) {
-        const data = await discordRes.json();
-        setChannels(data.channels ?? []);
-      }
-      if (guildRes.ok) {
-        const guild = await guildRes.json();
-        setModuleEnabled(Boolean(guild.isYoutubeEnabled));
-      }
-      setLoading(false);
-    }).catch(() => { setError("Failed to load."); setLoading(false); });
+    loadFeatureList({
+      guildId,
+      resource: "youtube",
+      setItems: setSubs,
+      setChannels,
+      setError,
+      setLoading,
+      extra: {
+        url: `/api/server/${guildId}`,
+        onData: (guild) => {
+          setModuleEnabled(Boolean(guild.isYoutubeEnabled));
+          setViewerScopes(guild.viewerScopes);
+        },
+      },
+    });
   }, [guildId]);
+
+  const list: FeatureList<Subscription> = {
+    basePath: `/api/server/${guildId}/youtube`,
+    items: subs,
+    setItems: setSubs,
+    setSaving,
+    setMessage,
+  };
 
   async function handleResolve() {
     if (!formSearch.trim()) return;
@@ -95,33 +108,23 @@ export default function YouTubePage() {
   }
 
   async function handleCreate() {
-    setSaving(true);
-    setMessage(null);
-    const res = await fetch(`/api/server/${guildId}/youtube`, {
-      method: "POST",
-      credentials: "same-origin",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
+    await createFeatureItem(
+      list,
+      {
         youtubeChannelId: formYtChannel.trim(),
         youtubeChannelName: formYtName.trim() || null,
         notifyChannelId: formNotifyChannel,
         customMessage: formCustomMessage.trim() || null,
-      }),
-    });
-    if (res.ok) {
-      const newSub = await res.json();
-      setSubs([...subs, newSub]);
-      setShowForm(false);
-      setFormSearch("");
-      setFormYtChannel("");
-      setFormYtName("");
-      setFormCustomMessage("");
-      setMessage({ type: "success", text: "YouTube subscription added!" });
-    } else {
-      const data = await res.json();
-      setMessage({ type: "error", text: data.error ?? "Failed to create." });
-    }
-    setSaving(false);
+      },
+      "YouTube subscription added!",
+      () => {
+        setShowForm(false);
+        setFormSearch("");
+        setFormYtChannel("");
+        setFormYtName("");
+        setFormCustomMessage("");
+      },
+    );
   }
 
   async function handleModuleToggle() {
@@ -144,16 +147,7 @@ export default function YouTubePage() {
   }
 
   async function handleToggle(id: string, currentlyEnabled: boolean) {
-    const res = await fetch(`/api/server/${guildId}/youtube/${id}`, {
-      method: "PATCH",
-      credentials: "same-origin",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ isEnabled: !currentlyEnabled }),
-    });
-    if (res.ok) {
-      const updated = await res.json();
-      setSubs(subs.map((s) => (s.id === id ? updated : s)));
-    }
+    await toggleFeatureItem(list, id, currentlyEnabled);
   }
 
   function startEdit(s: Subscription) {
@@ -166,40 +160,17 @@ export default function YouTubePage() {
   }
 
   async function handleSaveEdit() {
-    if (editingId === null) return;
-    setSaving(true);
-    const res = await fetch(`/api/server/${guildId}/youtube/${editingId}`, {
-      method: "PATCH",
-      credentials: "same-origin",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(editData),
-    });
-    if (res.ok) {
-      const updated = await res.json();
-      setSubs(subs.map((s) => (s.id === editingId ? updated : s)));
+    await saveFeatureItemEdit(list, editingId, editData, "Subscription updated!", () => {
       setEditingId(null);
       setEditData({});
-      setMessage({ type: "success", text: "Subscription updated!" });
-    } else {
-      const data = await res.json();
-      setMessage({ type: "error", text: data.error ?? "Failed to update." });
-    }
-    setSaving(false);
+    });
   }
 
   async function handleDelete(id: string) {
-    const res = await fetch(`/api/server/${guildId}/youtube/${id}`, {
-      method: "DELETE",
-      credentials: "same-origin",
-    });
-    if (res.ok) {
-      setSubs(subs.filter((s) => s.id !== id));
-      setMessage({ type: "success", text: "Subscription deleted." });
-    }
-    setDeleteConfirmId(null);
+    await deleteFeatureItem(list, id, "Subscription deleted.", () => setDeleteConfirmId(null));
   }
 
-  const textChannels = channels.filter((c) => c.type === "text" || c.type === "announcement");
+  const textChannels = filterTextChannels(channels);
 
   if (loading) {
     return (
@@ -217,13 +188,17 @@ export default function YouTubePage() {
           <h1 className="text-2xl font-bold">YouTube Notifications</h1>
           <p className="text-dc-text-muted text-sm mt-0.5">Get notified when YouTube channels upload new videos</p>
         </div>
-        <button
-          onClick={() => setShowForm(!showForm)}
-          className="px-4 py-2 bg-dc-accent hover:bg-dc-accent-hover text-white text-sm font-medium rounded-md transition-colors cursor-pointer"
-        >
-          {showForm ? "Cancel" : "+ Add Channel"}
-        </button>
+        {canWrite && (
+          <button
+            onClick={() => setShowForm(!showForm)}
+            className="px-4 py-2 bg-dc-accent hover:bg-dc-accent-hover text-white text-sm font-medium rounded-md transition-colors cursor-pointer"
+          >
+            {showForm ? "Cancel" : "+ Add Channel"}
+          </button>
+        )}
       </div>
+
+      {!canWrite && <p className="text-dc-text-muted text-sm mb-6">{missingScopeNote("youtube")}</p>}
 
       <div className="flex items-center justify-between gap-4 bg-dc-bg-secondary border border-dc-border rounded-lg px-5 py-4 mb-6">
         <div>
@@ -236,7 +211,7 @@ export default function YouTubePage() {
         </div>
         <button
           onClick={handleModuleToggle}
-          disabled={togglingModule}
+          disabled={togglingModule || !canWrite}
           aria-label="Enable YouTube notifications"
           className={`relative w-10 h-5 rounded-full transition-colors cursor-pointer shrink-0 disabled:opacity-50 disabled:cursor-not-allowed ${moduleEnabled ? "bg-dc-accent" : "bg-dc-border"}`}
         >
@@ -254,7 +229,7 @@ export default function YouTubePage() {
         </div>
       )}
 
-      {showForm && (
+      {showForm && canWrite && (
         <div className="bg-dc-bg-secondary border border-dc-border rounded-lg p-5 mb-6">
           <h2 className="text-sm font-semibold text-dc-text-primary mb-4">Add YouTube Channel</h2>
           <div className="space-y-3">
@@ -324,16 +299,16 @@ export default function YouTubePage() {
         </div>
       )}
 
-      {subs.length === 0 && !showForm && (
+      {subs.length === 0 && !(showForm && canWrite) && (
         <div className="bg-dc-bg-secondary border border-dc-border rounded-lg p-8 text-center">
           <p className="text-dc-text-muted">No YouTube subscriptions yet.</p>
-          <p className="text-dc-text-muted text-sm mt-1">Click &quot;+ Add Channel&quot; to get started.</p>
+          {canWrite && <p className="text-dc-text-muted text-sm mt-1">Click &quot;+ Add Channel&quot; to get started.</p>}
         </div>
       )}
 
       {subs.map((s) => {
         const channelName = channels.find((c) => c.id === s.notifyChannelId)?.name ?? s.notifyChannelId;
-        const isEditing = editingId === s.id;
+        const isEditing = canWrite && editingId === s.id;
 
         if (isEditing) {
           return (
@@ -385,19 +360,21 @@ export default function YouTubePage() {
                 {s.customMessage && <p className="text-xs text-dc-text-muted mt-0.5 truncate">Template: {s.customMessage}</p>}
                 {!s.youtubeChannelName && <p className="text-xs text-dc-text-muted mt-0.5 font-mono">{s.youtubeChannelId}</p>}
               </div>
-              <div className="flex items-center gap-2 ml-3 shrink-0">
-                <button onClick={() => startEdit(s)} className="text-dc-text-muted hover:text-dc-accent transition-colors cursor-pointer text-xs">Edit</button>
-                <button onClick={() => handleToggle(s.id, s.isEnabled)} className={`relative w-10 h-5 rounded-full transition-colors cursor-pointer ${s.isEnabled ? "bg-dc-accent" : "bg-dc-border"}`}>
-                  <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-[left] ${s.isEnabled ? "left-[20px]" : "left-0.5"}`} />
-                </button>
-                <button onClick={() => setDeleteConfirmId(s.id)} className="text-dc-text-muted hover:text-dc-danger transition-colors cursor-pointer text-sm">&#x2715;</button>
-              </div>
+              {canWrite && (
+                <div className="flex items-center gap-2 ml-3 shrink-0">
+                  <button onClick={() => startEdit(s)} className="text-dc-text-muted hover:text-dc-accent transition-colors cursor-pointer text-xs">Edit</button>
+                  <button onClick={() => handleToggle(s.id, s.isEnabled)} className={`relative w-10 h-5 rounded-full transition-colors cursor-pointer ${s.isEnabled ? "bg-dc-accent" : "bg-dc-border"}`}>
+                    <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-[left] ${s.isEnabled ? "left-[20px]" : "left-0.5"}`} />
+                  </button>
+                  <button onClick={() => setDeleteConfirmId(s.id)} className="text-dc-text-muted hover:text-dc-danger transition-colors cursor-pointer text-sm">&#x2715;</button>
+                </div>
+              )}
             </div>
           </div>
         );
       })}
 
-      {deleteConfirmId !== null && (
+      {deleteConfirmId !== null && canWrite && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={() => setDeleteConfirmId(null)}>
           <div className="bg-dc-bg-secondary border border-dc-border rounded-lg p-6 max-w-sm w-full mx-4 shadow-xl" onClick={(e) => e.stopPropagation()}>
             <h3 className="text-lg font-semibold text-dc-text-primary mb-2">Remove Subscription</h3>

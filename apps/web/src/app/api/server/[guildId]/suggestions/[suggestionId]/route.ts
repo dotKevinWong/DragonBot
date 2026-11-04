@@ -1,47 +1,27 @@
 import { NextResponse } from "next/server";
+import { requireGuildAccess, FEATURE_ROUTE_BODIES, invalidDataResponse } from "@/lib/route-guard";
 import { eq, and } from "drizzle-orm";
-import { suggestions } from "@dragonbot/db";
+import { suggestions } from "@dragonbot/db/schema";
+import { SUGGESTION_STATUSES } from "@dragonbot/db/contracts";
 import { db } from "@/lib/db";
-import { getAuthenticatedUser } from "@/lib/auth";
-import { checkGuildPermission } from "@/lib/discord";
 import { z } from "zod";
-import { DISCORD_SNOWFLAKE_RE } from "@/lib/validators";
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-const VALID_STATUSES = ["pending", "approved", "rejected", "completed", "archived"] as const;
 
 const updateSchema = z.object({
-  status: z.enum(VALID_STATUSES),
+  status: z.enum(SUGGESTION_STATUSES),
 });
 
 export async function PATCH(
   request: Request,
   { params }: { params: Promise<{ guildId: string; suggestionId: string }> },
 ) {
-  const discordId = await getAuthenticatedUser(request);
-  if (!discordId) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
-  const { guildId, suggestionId } = await params;
-
-  if (!DISCORD_SNOWFLAKE_RE.test(guildId) || !UUID_RE.test(suggestionId)) {
-    return NextResponse.json({ error: "Not found", code: "NOT_FOUND" }, { status: 404 });
-  }
-
-  const hasPermission = await checkGuildPermission(guildId, discordId);
-  if (!hasPermission) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-  }
+  const access = await requireGuildAccess(request, params, { bodies: FEATURE_ROUTE_BODIES, uuidParams: ["suggestionId"], scope: "suggestions" });
+  if (!access.ok) return access.response;
+  const { guildId, suggestionId } = access.params;
 
   const body = await request.json();
   const parsed = updateSchema.safeParse(body);
   if (!parsed.success) {
-    return NextResponse.json(
-      { error: "Invalid data", ...(process.env.NODE_ENV !== "production" && { details: parsed.error.issues }) },
-      { status: 400 },
-    );
+    return invalidDataResponse(parsed.error.issues, { withCode: false });
   }
 
   const rows = await db
@@ -61,21 +41,9 @@ export async function DELETE(
   request: Request,
   { params }: { params: Promise<{ guildId: string; suggestionId: string }> },
 ) {
-  const discordId = await getAuthenticatedUser(request);
-  if (!discordId) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
-  const { guildId, suggestionId } = await params;
-
-  if (!DISCORD_SNOWFLAKE_RE.test(guildId) || !UUID_RE.test(suggestionId)) {
-    return NextResponse.json({ error: "Not found", code: "NOT_FOUND" }, { status: 404 });
-  }
-
-  const hasPermission = await checkGuildPermission(guildId, discordId);
-  if (!hasPermission) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-  }
+  const access = await requireGuildAccess(request, params, { bodies: FEATURE_ROUTE_BODIES, uuidParams: ["suggestionId"], scope: "suggestions" });
+  if (!access.ok) return access.response;
+  const { guildId, suggestionId } = access.params;
 
   const rows = await db
     .update(suggestions)

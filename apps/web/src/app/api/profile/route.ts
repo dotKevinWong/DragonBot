@@ -4,6 +4,8 @@ import { users } from "@dragonbot/db/schema";
 import { db } from "@/lib/db";
 import { getAuthenticatedUser } from "@/lib/auth";
 import { profileUpdateSchema } from "@/lib/validators";
+import { invalidDataResponse } from "@/lib/route-guard";
+import { toSafeUser } from "@/lib/safe-rows";
 
 export async function GET(request: Request) {
   const discordId = await getAuthenticatedUser(request);
@@ -19,8 +21,7 @@ export async function GET(request: Request) {
   }
 
   // Strip sensitive fields
-  const { id: _id, email: _email, jwtInvalidBefore: _jib, banGuildId: _bg, bannedAt: _ba, isBanned: _ib, ...safeUser } = user;
-  return NextResponse.json(safeUser);
+  return NextResponse.json(toSafeUser(user));
 }
 
 export async function PATCH(request: Request) {
@@ -32,10 +33,7 @@ export async function PATCH(request: Request) {
   const body = await request.json();
   const parsed = profileUpdateSchema.safeParse(body);
   if (!parsed.success) {
-    return NextResponse.json(
-      { error: "Invalid data", code: "VALIDATION_ERROR", ...(process.env.NODE_ENV !== "production" && { details: parsed.error.issues }) },
-      { status: 400 },
-    );
+    return invalidDataResponse(parsed.error.issues, { withCode: true });
   }
 
   const rows = await db
@@ -48,6 +46,5 @@ export async function PATCH(request: Request) {
     return NextResponse.json({ error: "Profile not found", code: "NOT_FOUND" }, { status: 404 });
   }
 
-  const { id: _id, email: _email, jwtInvalidBefore: _jib, banGuildId: _bg, bannedAt: _ba, isBanned: _ib, ...safeUpdated } = rows[0]!;
-  return NextResponse.json(safeUpdated);
+  return NextResponse.json(toSafeUser(rows[0]!));
 }

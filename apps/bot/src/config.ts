@@ -9,7 +9,6 @@ const envSchema = z.object({
   OPENAI_API_KEY: z.string().min(1, "OPENAI_API_KEY is required"),
   OPENAI_MODEL: z.string().default("gpt-5-mini"),
   WEBAPP_URL: z.string().url("WEBAPP_URL must be a valid URL"),
-  JWT_SECRET: z.string().min(32, "JWT_SECRET must be at least 32 characters"),
   BOT_WEBHOOK_SECRET: z.string().min(16, "BOT_WEBHOOK_SECRET must be at least 16 characters").optional(),
   BOT_WEBHOOK_PORT: z.coerce.number().int().min(1).max(65535).default(3001),
 });

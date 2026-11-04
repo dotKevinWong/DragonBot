@@ -27,7 +27,7 @@ function recordRemoval(honeypot: HoneypotService, record: ActionRecord, userId =
  * u1 has just left g1, whose audit log holds `kickEntries`. DragonBot is bot-self.
  * The honeypot is the real in-memory service. The log sink and Discord are fakes.
  */
-function setup(kickEntries: FakeAuditEntry[] = []) {
+function setup(kickEntries: FakeAuditEntry[] = [], enabled: string[] = ["member_leave", "kick"]) {
   const fetchAuditLogs = vi.fn(async (_options: unknown) => ({
     entries: new Collection(kickEntries.map((entry): [string, FakeAuditEntry] => [entry.id, entry])),
   }));
@@ -39,7 +39,7 @@ function setup(kickEntries: FakeAuditEntry[] = []) {
   } as unknown as GuildMember;
   const honeypot = new HoneypotService();
   const logging = {
-    shouldLog: vi.fn(async (_guildId: string, _event: string) => true),
+    shouldLog: vi.fn(async (_guildId: string, event: string) => enabled.includes(event)),
     sendLogEmbed: vi.fn(async (_guildId: string, _embed: EmbedBuilder, _client: unknown, _logger: unknown): Promise<void> => {}),
   };
   const logger = { child: vi.fn(() => ({})) };
@@ -86,6 +86,7 @@ describe("guildMemberRemove event", () => {
 
     expect(logging.sendLogEmbed).not.toHaveBeenCalled();
     expect(fetchAuditLogs).not.toHaveBeenCalled();
+    expect(logging.shouldLog).not.toHaveBeenCalled();
   });
 
   it("logs ordinary leaves and kicks as before", async () => {
@@ -122,5 +123,70 @@ describe("guildMemberRemove event", () => {
       expect(entry.fields).toContainEqual(expect.objectContaining({ name: "Kicked by", value: "<@mod-1> (mod#0001)" }));
       expect(entry.fields).toContainEqual(expect.objectContaining({ name: "Reason", value: "spamming" }));
     }
+  });
+
+  const modKick = (): FakeAuditEntry => ({
+    id: "entry-1",
+    targetId: "u1",
+    executor: { id: "mod-1", tag: "mod#0001" },
+    reason: "spamming",
+    createdTimestamp: Date.now() - 1_000,
+  });
+
+  it("doesn't read the audit log when neither leaves nor kicks are logged", async () => {
+    const { member, fetchAuditLogs, logging, ctx } = setup([modKick()], []);
+
+    await event.execute(member, ctx);
+
+    expect(fetchAuditLogs).toHaveBeenCalledTimes(0);
+    expect(logging.sendLogEmbed).not.toHaveBeenCalled();
+  });
+
+  it("still takes the honeypot's record when logging is off", async () => {
+    const { member, honeypot, logging, ctx } = setup([], []);
+    recordRemoval(honeypot, kickRecord);
+
+    await event.execute(member, ctx);
+
+    expect(logging.sendLogEmbed).not.toHaveBeenCalled();
+    expect(honeypot.takeRemoveEvent("g1", "u1")).toBeNull();
+  });
+
+  it("logs only the Kick entry when leaves aren't logged", async () => {
+    const { member, fetchAuditLogs, logging, ctx } = setup([modKick()], ["kick"]);
+
+    await event.execute(member, ctx);
+
+    expect(fetchAuditLogs).toHaveBeenCalledTimes(1);
+    expect(logEntries(logging).map((entry) => entry.title)).toEqual(["Kick"]);
+  });
+
+  it("logs only Member Kicked when kicks aren't logged", async () => {
+    const { member, fetchAuditLogs, logging, ctx } = setup([modKick()], ["member_leave"]);
+
+    await event.execute(member, ctx);
+
+    expect(fetchAuditLogs).toHaveBeenCalledTimes(1);
+    expect(logEntries(logging).map((entry) => entry.title)).toEqual(["Member Kicked"]);
+  });
+
+  it("logs nothing for a plain leave when only kicks are logged", async () => {
+    const { member, fetchAuditLogs, logging, ctx } = setup([], ["kick"]);
+
+    await event.execute(member, ctx);
+
+    expect(fetchAuditLogs).toHaveBeenCalledTimes(1);
+    expect(logging.sendLogEmbed).not.toHaveBeenCalled();
+  });
+
+  it("reads the honeypot's record before awaiting anything", async () => {
+    const { member, honeypot, ctx } = setup();
+    recordRemoval(honeypot, kickRecord);
+    const take = vi.spyOn(honeypot, "takeRemoveEvent");
+
+    // execute runs synchronously up to its first await.
+    const pending = event.execute(member, ctx);
+    expect(take).toHaveBeenCalledTimes(1);
+    await pending;
   });
 });

@@ -1,8 +1,7 @@
 import { SlashCommandBuilder, EmbedBuilder, type ChatInputCommandInteraction } from "discord.js";
 import type { BotContext } from "../types/context.js";
 import type { BotCommand } from "../types/commands.js";
-import { AppError } from "../types/errors.js";
-import { errorEmbed } from "../utils/embeds.js";
+import { replyAppErrorOrFail } from "../utils/command-helpers.js";
 
 const command: BotCommand = {
   data: new SlashCommandBuilder()
@@ -51,12 +50,7 @@ const command: BotCommand = {
         }
       }
     } catch (err) {
-      if (err instanceof AppError) {
-        await interaction.editReply({ embeds: [errorEmbed(err.message)] });
-        return;
-      }
-      ctx.logger.error({ err }, "Error in /whois");
-      await interaction.editReply({ embeds: [errorEmbed("Something went wrong.")] });
+      await replyAppErrorOrFail(interaction, err, () => ctx.logger.error({ err }, "Error in /whois"));
     }
   },
 };

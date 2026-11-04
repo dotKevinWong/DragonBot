@@ -1,10 +1,6 @@
 import type { BirthdayRepository, BirthdayRow } from "../repositories/birthday.repository.js";
 import { AppError, ErrorCode } from "../types/errors.js";
-
-const MONTH_NAMES = [
-  "January", "February", "March", "April", "May", "June",
-  "July", "August", "September", "October", "November", "December",
-];
+import { MONTH_NAMES, nextBirthdayYear } from "../utils/birthday.js";
 
 const DAYS_IN_MONTH = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
 
@@ -14,7 +10,7 @@ function ordinal(n: number): string {
   return `${n}${s[(v - 20) % 10] ?? s[v] ?? s[0]}`;
 }
 
-export interface UpcomingBirthday {
+interface UpcomingBirthday {
   discordId: string;
   month: number;
   day: number;
@@ -68,14 +64,8 @@ export class BirthdayService {
     // Calculate days until each birthday
     const withDays: UpcomingBirthday[] = guildBirthdays.map((b) => {
       const thisYear = now.getFullYear();
-      // Try this year first, then next year
-      let targetDate = new Date(thisYear, b.birthMonth - 1, b.birthDay);
-      if (
-        b.birthMonth < todayMonth ||
-        (b.birthMonth === todayMonth && b.birthDay < todayDay)
-      ) {
-        targetDate = new Date(thisYear + 1, b.birthMonth - 1, b.birthDay);
-      }
+      // This year's date, or next year's once it has passed
+      const targetDate = new Date(nextBirthdayYear(b.birthMonth, b.birthDay, now), b.birthMonth - 1, b.birthDay);
       const diffMs = targetDate.getTime() - new Date(thisYear, todayMonth - 1, todayDay).getTime();
       const daysUntil = Math.round(diffMs / (1000 * 60 * 60 * 24));
 
