@@ -22,7 +22,7 @@
   - `ignore_case`, shown as "Word for word, ignoring case": identical once lowercased.
   - `similar`, shown as "Too similar": lowercased, links replaced by one placeholder, punctuation and emoji removed; matches when the word sets' Jaccard similarity (shared words ÷ all distinct words) is **at least 0.8**.
 - Every level first trims the text and collapses runs of whitespace. Attachments, stickers and embeds are never compared.
-- Length floor: the compared text is at least **20 characters and 3 words**.
+- Length floor, the same at every level: after removing links, custom emoji, other emoji and punctuation (so only letters, digits and single spaces are left), the text has at least **20 characters**, counted as code points, and at least **3 distinct words**. Lone emojis, link-only posts and one word repeated ("lol lol lol lol lol lol lol") never count.
 - Window: **60 seconds**, fixed, from the first tracked copy.
 - Copies count per **distinct channel**; a thread is its own channel. Same-channel repeats never add a channel.
 - Channel count (`repeat_spam_channel_count`): default **3**, range **2 to 10**.
@@ -61,6 +61,7 @@
 3. **Copies that differ only in whitespace or line breaks** (clients and copy-paste disagree on trailing spaces and newlines) still match at every level. *(Task 2 test "matches across whitespace differences at every level")*
 4. **A wave of many accounts, or one account posting many different messages:** memory stays bounded; each account keeps at most `MAX_TRACKED_PER_ACCOUNT` entries, and idle accounts are forgotten. *(Task 2 test "caps each account's entries and forgets idle accounts")*
 5. **The kick fails** (the account outranks DragonBot): DragonBot deletes the copies itself, then the notice names the repeated-message check, not the honeypot channel. *(Task 4 test "deletes the copies itself when the kick fails, then sends a notice naming the check")*
+6. **Emoji, links or one word repeated** ("😂 😂 😂 😂 😂 😂 😂", three custom emoji, "lol lol lol lol lol lol lol") never count at any level, so they can't get a member kicked. *(Task 2 floor test)*
 
 ---
 
@@ -202,14 +203,23 @@ describe("compareKey and isSameMessage", () => {
     expect(isSameMessage(compareKey(SENTENCE, "exact")!, compareKey(SENTENCE, "ignore_case")!)).toBe(false);
   });
 
-  it("counts only text of at least 20 characters and 3 words", () => {
+  it("counts only text with at least 20 characters and 3 distinct words once links, emoji and punctuation are gone", () => {
     for (const mode of REPEAT_SPAM_MATCH_MODES) {
-      for (const short of ["gm", "lol", "🎉🎉🎉", "", "abcde fghij klmnopq", "abcdefghijklmnopqrstuvwxyz ab"]) {
+      for (const short of [
+        "gm", "lol", "🎉🎉🎉", "", "abcde fghij klmnopq", "abcdefghijklmnopqrstuvwxyz ab",
+        "😂 😂 😂 😂 😂 😂 😂",                                       // 20 UTF-16 units, 7 "words", no letters
+        "<:kekw:123456789012345678> <:kekw:123456789012345678> <:pog:123456789012345678>",
+        "lol lol lol lol lol lol lol",                                // one distinct word
+        "https://a.example/one https://b.example/two https://c.example/three",
+        "hey check https://a.example/some-long-path",
+        "éé ÿÿ üü 🎉🎉🎉🎉🎉🎉🎉",                                       // 8 code points once emoji go
+      ]) {
         expect(compareKey(short, mode)).toBeNull();
       }
       expect(compareKey("abcde fghij klmnopqr", mode)).not.toBeNull();
+      expect(compareKey("Free Nitro here 😂😂 https://scam.example/a", mode)).toBeNull(); // "free nitro here" is 15
+      expect(compareKey("Free Nitro for everyone 😂 https://scam.example/a", mode)).not.toBeNull(); // 23
     }
-    expect(compareKey("hey check https://a.example/some-long-path", "similar")).toBeNull();
   });
 });
 ```
@@ -252,8 +262,18 @@ const similar = base
   .replace(/[^\p{L}\p{N}_\s]/gu, "")         // punctuation and emoji
   .replace(/\s+/g, " ")
   .trim();
-// floor, on the compared text: length >= MIN_COMPARED_CHARS && split(" ").length >= MIN_COMPARED_WORDS
+// floor, the same at every level, on its own stripped text (not on the compared text):
+const floor = base
+  .toLowerCase()
+  .replace(/<a?:\w+:\d+>/g, " ")
+  .replace(/https?:\/\/\S+/g, " ")
+  .replace(/[^\p{L}\p{N}\s]/gu, "")
+  .replace(/\s+/g, " ")
+  .trim();
+// passes when [...floor].length >= MIN_COMPARED_CHARS && new Set(floor.split(" ")).size >= MIN_COMPARED_WORDS
 ```
+
+The floor never uses `.length` on the raw text: `.length` counts UTF-16 units, so seven emoji with spaces would pass.
 
 `exact` and `ignore_case` keys hold a SHA-256 hex of the compared text, so memory doesn't grow with message length. `similar` keys hold the set of words.
 
@@ -323,7 +343,7 @@ In `honeypot-enforcer.test.ts`, replace every `posted in the honeypot <#trap>.` 
 Run: `pnpm --filter bot test logging.service honeypot-enforcer`
 Expected: FAIL: `sendHoneypotEmbed` is not a function, the notice texts differ, and the import is missing.
 
-- [ ] **Step 3: Implement the move.** `handleArmedMessage` and `runRemovalCase` call `removeAccount(guild, userId, { action, reason: removalReason(action, message.channel.name, message.id), channelId: message.channelId, memberLeft, caseId }, ctx)`. Their `sendHoneypotNotice` calls pass `trapLead(message.author.id, message.channelId)`; `outcomeText` calls pass `messageFate(deleted)`. `sendNotice` builds its embed as before and sends it through `sendHoneypotEmbed`.
+- [ ] **Step 3: Implement the move.** `handleArmedMessage` and `runRemovalCase` call `removeAccount(guild, userId, { action, reason: removalReason(action, message.channel.name, message.id), channelId: message.channelId, memberLeft, caseId }, ctx)`. Every `sendHoneypotNotice` call in `honeypot-enforcer.ts` passes `trapLead(message.author.id, message.channelId)`: the ones in `deleteOnly` (three, today at lines 272, 275 and 276) and in `runRemovalCase` (lines 308 and 311); `outcomeText` calls pass `messageFate(deleted)`. `sendNotice` builds its embed as before and sends it through `sendHoneypotEmbed`.
 
 - [ ] **Step 4: Verify**
 
@@ -348,7 +368,7 @@ git commit -m "Move the honeypot's removal path into its own module and name the
 - Modify: `apps/bot/src/utils/message-log.ts`. Add `buildRepeatSpamEmbed`.
 - Modify: `apps/bot/src/events/message-create.ts:19-20`. After the `deleteLateMessage` line, add `if ((await handleRepeatSpamMessage(message, guild, ctx)) === "handled") return;`.
 - Modify: `apps/bot/src/types/context.ts:44` (add `repeatSpam: RepeatSpamService;`) and `apps/bot/src/index.ts:89,112` (add `const repeatSpamService = new RepeatSpamService();` and `repeatSpam: repeatSpamService`).
-- Test: `apps/bot/tests/lib/repeat-spam-enforcer.test.ts`, `apps/bot/tests/utils/message-log.test.ts`
+- Test: `apps/bot/tests/lib/repeat-spam-enforcer.test.ts`, `apps/bot/tests/utils/message-log.test.ts`, `apps/bot/tests/events/message-create.test.ts` (new)
 
 **Interfaces:**
 - Consumes: `isRepeatSpamArmed` (Task 1); `compareKey`, `RepeatSpamService`, `RepeatTrigger`, `repeatRemovalReason` (Task 2); `lookUpAuthor`, `memberStatus`, `isVerified`, `STAFF_PERMISSIONS`, `removeAccount`, `outcomeText`, `needsAttention`, `cutReason`, `describeError`, `hasErrorCode`, `sendHoneypotNotice`, `logging.sendHoneypotEmbed` (Task 3); `HoneypotService.beginCase/endCase/track/isClosing/markOwnDeletion`, `isRealPost`, `decideHoneypot`.
@@ -375,15 +395,17 @@ git commit -m "Move the honeypot's removal path into its own module and name the
 4. If `repeatSpam.isCopyOfOpenCase(...)`, mark the message as DragonBot's own deletion, delete it (ignore errors) and return `"handled"`.
 5. `trigger = repeatSpam.track(guildId, userId, { channelId, messageId }, key, settings.repeatSpamChannelCount, Date.now())`. If null, return `"not_caught"`.
 6. Note `closingOnArrival = honeypot.isClosing`, then return `honeypot.track(...)` of the rest:
-   1. Run `lookUpAuthor`, then `decideHoneypot(memberStatus(...))`.
-      - `ignore` (staff) returns `"not_caught"`.
-      - Lookup failure: pino `warn` ("Couldn't look up a repeated-message poster"), then return `"not_caught"`.
-      - A verified member under the cached role returns `"not_caught"`.
+   1. Run `lookUpAuthor`, then `decideHoneypot(memberStatus(...))`. Each of these calls `repeatSpam.forget`, so later copies in the wave must reach the threshold again before the next lookup, and returns `"not_caught"`:
+      - `ignore` (staff)
+      - lookup failure, after a pino `warn` ("Couldn't look up a repeated-message poster")
+      - a verified member under the cached role
    2. Read `fresh = getSettingsFresh`. Return `"not_caught"` if any of these holds:
       - `fresh` is null, or `!isRepeatSpamArmed(fresh)`
       - `fresh.repeatSpamMatchMode !== settings.repeatSpamMatchMode`
       - `trigger.channelIds.length < fresh.repeatSpamChannelCount`
       - the author is verified under `fresh.verificationRoleId`
+
+      A verified author also calls `repeatSpam.forget`. The other four don't: `getSettingsFresh` has just refreshed the cache, so later copies are judged by the fresh row (off, a different level, or a higher count still to be reached) and don't repeat this path.
    3. `beginCase(guildId, userId, message.createdTimestamp)`. On `same_case`, delete this message as in step 4 and return `"handled"`.
    4. Call `repeatSpam.forget` and `repeatSpam.openCase(..., caseId, key)`.
    5. If `closingOnArrival`:
@@ -396,16 +418,16 @@ git commit -m "Move the honeypot's removal path into its own module and name the
 **`runRepeatCase`:**
 - In a `try`, run `removeAccount(guild, userId, { action: "kick", reason: repeatRemovalReason(n), channelId: message.channelId, memberLeft, caseId }, ctx)`. In `finally`, call `endCase` and `closeCase`.
 - Unless the outcome is `removed` or `still_banned` (a confirmed ban already cleaned up), delete every tracked copy itself.
-  - Copies are deleted through `guild.channels.cache.get(channelId)` and `channel.messages.delete(messageId)`, each marked first with `markOwnDeletion`.
-  - Unknown Message and a channel missing from the cache both mean the copy is gone.
+  - Each copy is deleted through `await guild.channels.fetch(channelId)` (it answers from the cache when it can, and fetches threads that have dropped out of it), then `channel.messages.delete(messageId)`, marked first with `markOwnDeletion`.
+  - Only Unknown Message (10008) and Unknown Channel (10003), from either call, mean the copy is gone. Every other error, a `null` channel and a channel that isn't text-based count as a failed delete, so no text ever claims a delete that didn't happen.
 - Then log with pino: `warn` when `needsAttention(outcome)`, otherwise `info`; message "Repeated-message case handled".
 - Then send the embed through `sendHoneypotEmbed`.
 - Then send the notice when `needsAttention(outcome)`.
 - Then send the copy-delete failure notice, if any copy failed.
 
 - [ ] **Step 1: Write the failing tests.** Build this file's own fakes, modeled on `honeypot-enforcer.test.ts`; don't import from another test file.
-  - `fakeGuild()` has text channels `a`, `b`, `c`, `d` and `trap` in `channels.cache`, each with `messages.delete: vi.fn()`.
-  - `fakeMessage(guild, { channelId, id, content = SENTENCE, member, ... })`.
+  - `fakeGuild()` has text channels `a`, `b`, `c`, `d`, `e` and `trap` in `channels.cache`, each with `messages.delete: vi.fn()`, and `channels.fetch: vi.fn(async (id) => cache.get(id) ?? null)`.
+  - `fakeMessage(guild, { channelId, id, content = SENTENCE, member, createdTimestamp, ... })`. `createdTimestamp` defaults to `Date.now()`, as in `honeypot-enforcer.test.ts`: `beginCase` compares it with the last case's end time, so leaving it undefined would let a late copy start a second case.
   - `repeatRow(overrides)` has `isRepeatSpamEnabled: true, repeatSpamChannelCount: 3, repeatSpamMatchMode: "ignore_case", verificationRoleId: "verified-role"` and the trap off.
   - `setup()` returns the real `HoneypotService` and `RepeatSpamService` with fake `logging` (`sendHoneypotEmbed`, `sendNotice`, `sendLogEmbed`, `shouldLog`) and a fake `guild.getSettingsFresh`.
   - `postIn(...channels)` runs one message per channel through `handleRepeatSpamMessage`, in order.
@@ -420,7 +442,8 @@ Tests (the assertions each one makes):
 - `"never acts on repeats in one channel"`: `postIn("a","a","a","a")` makes no ban, no delete and no `sendHoneypotEmbed`.
 - `"leaves staff alone completely"`: a gateway member with `KickMembers`. No ban, no delete, no embed, no notice, `getSettingsFresh` not called, every call returns `"not_caught"`.
 - `"leaves verified members alone completely"`: the same assertions, with a member holding `verified-role`.
-- `"does nothing when the member lookup fails"`: `member: null`, and `fetch` rejects with Missing Permissions. No ban, no delete, no embed, no notice; `logger.warn` called once.
+- `"does nothing when the member lookup fails"`: `member: null`, and `fetch` rejects with Missing Permissions. No ban, no delete, no embed, no notice; `logger.warn` called once. Then `postIn("d")` returns `"not_caught"` without another `fetch` or `warn` (the tracker was cleared).
+- `"leaves staff alone when only the fetched member shows it"`: `member: null`, and `fetch` resolves a member with `BanMembers`. No ban, no delete, no embed, no notice, `getSettingsFresh` not called, every call returns `"not_caught"`; then `postIn("d")` makes no second `fetch`.
 - `"kicks an author who already left"`: `member: null`, and `fetch` rejects with Unknown Member. Ban called once; the embed's `Honeypot Action` is `Kicked. They had already left; only what DragonBot saw was cleaned up.`
 - `"makes no Discord or database calls below the threshold"`: `member: null`, `postIn("a","b")`. `guild.members.fetch`, `getSettingsFresh` and `ban` are not called.
 - `"ignores bot, webhook and system posts, and servers with the check off"`: no `track` effect, so a following real post in `c` doesn't trigger.
@@ -431,7 +454,7 @@ Tests (the assertions each one makes):
   - `{ repeatSpamMatchMode: "fuzzy" }`
   - `{ verificationRoleId: <a role the member has> }`
   - `null`
-- `"kicks an account once for a burst"`: `member: null` with a `fetch` that resolves on the next tick, and five copies in five channels run with `Promise.all`. Ban called once, one embed, and copies 4 and 5 have `delete` called.
+- `"kicks an account once for a burst"`: `member: null` with a `fetch` that resolves on the next tick, and five copies in five channels run with `Promise.all`, every copy with a `createdTimestamp` before the case starts. Ban called once, one embed, and copies 4 and 5 have `delete` called.
 - `"deletes copies that arrive while the case is open"`: the ban is held on a deferred promise. A copy in `d` has `delete` called and returns `"handled"`; a different sentence in `d` is not deleted and returns `"not_caught"`.
 - `"shares the case with the channel trap"`: the trap is armed in `trap` with `honeypotAction: "ban"`, and the ban is held. While the repeated-message case is open, `handleHoneypotMessage` on a `trap` post deletes it. After release, `ban` was called once, with the kick reason, and `bans.remove` was called.
 - `"deletes the copies itself when the kick fails, then sends a notice naming the check"`
@@ -439,17 +462,24 @@ Tests (the assertions each one makes):
   - Each copy's channel has `messages.delete` called with its ID, before `sendNotice` (compare `invocationCallOrder`).
   - `notices(logging)` equals `` [`<@u1> (u1) posted the same message in 3 channels (repeated-message check). Removal failed: Missing Permissions. Copies deleted.`] ``.
 - `"reports copies it couldn't delete"`: `ban` fails and channel `b`'s `messages.delete` rejects with Missing Permissions. The last notice is `` `... (repeated-message check). Couldn't delete 1 of the 3 copies: Missing Permissions. Delete them by hand if they're still there.` ``, and the case notice ends `Couldn't delete every copy.`
+- `"counts a copy as deleted only when Discord says it is gone"`: `ban` fails. Channel `a`'s `messages.delete` rejects with Unknown Message, `channels.fetch("b")` rejects with Unknown Channel, and `channels.fetch("c")` resolves `null`. The case notice ends `Couldn't delete every copy.` and the last notice is `` `... (repeated-message check). Couldn't delete 1 of the 3 copies: ...` ``.
 - `"logs the case with its own embed, whatever the event switches"`
   - `sendHoneypotEmbed` called once; its title is `Repeated Messages (Honeypot)`, its `Channels` field is `<#a>, <#b>, <#c>`, and its `Content` is the sentence.
   - `shouldLog` not called, and `sendLogEmbed` not called.
 - `"starts no kick during shutdown and deletes nothing"`: `void honeypot.drain(1000)` first. No ban, no `delete`, no `messages.delete`; one notice ending `DragonBot was shutting down, so nobody was removed.`
 - `"keeps the shutdown drain waiting for the case"`: the ban is held, and `drain` doesn't resolve until it is released.
 
+In `message-create.test.ts` (new; import the event as `apps/bot/tests/events/message-delete.test.ts` does): `vi.mock` `../../src/lib/honeypot-enforcer.js` (`handleHoneypotMessage`, `deleteLateMessage`) and `../../src/lib/repeat-spam-enforcer.js` (`handleRepeatSpamMessage`). The settings row has the intro gate off and XP on, with a fake `ctx.services.xp.processMessage`. This pins the spec's rule that a message the trap handles never counts.
+- `"lets the channel trap handle a message first"`: `handleHoneypotMessage` resolves `"handled"`. `deleteLateMessage`, `handleRepeatSpamMessage` and `processMessage` are not called.
+- `"deletes a late message before the repeated-message check sees it"`: `"not_caught"`, then `deleteLateMessage` resolves `true`. `handleRepeatSpamMessage` and `processMessage` are not called.
+- `"runs the repeated-message check before the intro gate and XP"`: `"not_caught"`, `false`, then `handleRepeatSpamMessage` resolves `"handled"`. It was called with `(message, settings, ctx)` after `deleteLateMessage` (compare `invocationCallOrder`), and `processMessage` is not called.
+- `"carries on to XP when nothing catches the message"`: all three let it through, and `processMessage` is called once.
+
 In `message-log.test.ts`: `"builds the repeated-message embed"` asserts the title, description, field names in order (`Author`, `Channels`, `Content`, `Honeypot Action`, `ID`) and the 1024 cut on `Content`.
 
 - [ ] **Step 2: Run them to see them fail**
 
-Run: `pnpm --filter bot test repeat-spam-enforcer message-log`
+Run: `pnpm --filter bot test repeat-spam-enforcer message-log message-create`
 Expected: FAIL, module not found.
 
 - [ ] **Step 3: Implement** `buildRepeatSpamEmbed`, `repeat-spam-enforcer.ts` as specified above, and the wiring in `message-create.ts`, `context.ts` and `index.ts`.
@@ -462,7 +492,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add apps/bot/src/lib/repeat-spam-enforcer.ts apps/bot/src/utils/message-log.ts apps/bot/src/events/message-create.ts apps/bot/src/types/context.ts apps/bot/src/index.ts apps/bot/tests/lib/repeat-spam-enforcer.test.ts apps/bot/tests/utils/message-log.test.ts
+git add apps/bot/src/lib/repeat-spam-enforcer.ts apps/bot/src/utils/message-log.ts apps/bot/src/events/message-create.ts apps/bot/src/types/context.ts apps/bot/src/index.ts apps/bot/tests/lib/repeat-spam-enforcer.test.ts apps/bot/tests/utils/message-log.test.ts apps/bot/tests/events/message-create.test.ts
 git commit -m "Kick accounts that post the same message in several channels"
 ```
 
@@ -493,7 +523,11 @@ repeatSpamMatchMode: z.enum(REPEAT_SPAM_MATCH_MODES).optional(),
   - **`handleSave`:** after the trap's block, and outside `hasDiscordData`, send each new field only when it differs from `savedSettings`. A save that turns the check on sends all three. Extend the comment above to cover both parts.
   - **The card:** in `<Section title="Honeypot">`, keep the existing toggle, picker and action under a subheading `Channel trap`, and relabel the toggle "Enable channel trap". Then add a second group under a subheading `Repeated messages`. Both subheadings use the label style `text-xs font-semibold text-dc-text-secondary uppercase tracking-wide`, and the second group sits in `border-t border-dc-border pt-3 mt-1`. It holds:
     - `Toggle` "Enable repeated-message check".
-    - A number input labelled "Kick after the same message in this many channels", styled like the intro-gate inputs, with `min={2} max={10}`. `onChange` clamps to 2–10, using 2 when the value isn't a number.
+    - A number input labelled "Kick after the same message in this many channels", styled like the intro-gate inputs, with `min={2} max={10}`. Don't clamp while typing, or clearing the field to type a new number snaps it to 2. Keep the typed text in local state, `const [repeatCountText, setRepeatCountText] = useState<string | null>(null)`:
+      - `value={repeatCountText ?? String(settings.repeatSpamChannelCount)}`
+      - `onChange` only calls `setRepeatCountText(e.target.value)`.
+      - `onBlur` parses it with `parseInt`; a non-number keeps the current `settings.repeatSpamChannelCount`, anything else is clamped to 2–10 and passed to `update("repeatSpamChannelCount", …)`. Then `setRepeatCountText(null)`.
+      - The validator's 2–10 range still rejects anything that slips through on save.
     - A select labelled "Matching", styled like the Action select, with options `exact` "Word for word, case-sensitive", `ignore_case` "Word for word, ignoring case" and `similar` "Too similar".
     - One help `<p className="text-xs text-dc-text-muted">`: `Kicks an account that posts the same message in several different channels within a minute, and cleans up its messages from the last hour. Short messages like "gm" never count. Verified members and staff are never affected.`
   - Keep the existing help block at the end of the card. Its trap-specific lines stay as they are.
@@ -501,7 +535,7 @@ repeatSpamMatchMode: z.enum(REPEAT_SPAM_MATCH_MODES).optional(),
 - [ ] **Step 3: Verify**
 
 Run: `pnpm --filter web typecheck`, then `DATABASE_URL=postgres://u:p@localhost:5432/db JWT_SECRET=0123456789abcdef0123456789abcdef DISCORD_API_TOKEN=placeholder pnpm --filter web build`, then `git checkout -- apps/web/tsconfig.tsbuildinfo apps/web/next-env.d.ts`.
-Expected: the typecheck is clean and the build succeeds; `git status` shows only the two task files.
+Expected: the typecheck is clean and the build succeeds; `git status` shows only the two task files. `apps/web` has no test runner, so nothing automated checks that the three fields are sent only when they change, or the count field's typing; the task's review reads `handleSave` and the input's handlers for both.
 
 - [ ] **Step 4: Commit**
 
