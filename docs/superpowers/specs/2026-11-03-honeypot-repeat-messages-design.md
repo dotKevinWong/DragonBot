@@ -15,7 +15,6 @@ In the last spam wave, the accounts skipped the honeypot channel ("DragonPot"). 
 ## Non-goals
 
 - Changing how the channel trap behaves. Its code stays as it is, and its own switch already lets a server turn it off.
-- Catching messages that change between copies (a different emoji, a changed link). Kevin saw word-for-word copies.
 - Repeats in one channel. Someone may be making a joke, and Discord already handles same-channel floods.
 - Ban as an action. This check only kicks.
 
@@ -30,7 +29,10 @@ In the last spam wave, the accounts skipped the honeypot channel ("DragonPot"). 
 ### What counts
 
 - **Which messages.** Only messages from ordinary member accounts count. System messages, webhook posts and bot posts never count, and neither do DMs.
-- **Same message.** The text is compared after trimming and collapsing runs of whitespace; otherwise it must match exactly, case included. Attachments, stickers and embeds are not compared. *(my call)*
+- **Same message.** How alike two copies must be is a per-server setting, "Matching", with three levels (Kevin, 2026-11-03). Every level first trims the text and collapses runs of whitespace. Attachments, stickers and embeds are never compared.
+  - **Word for word, case-sensitive** (`exact`). The texts must be identical.
+  - **Word for word, ignoring case** (`ignore_case`, the default). The texts must be identical once lowercased. *(my call on the default: a spammer changing one capital letter shouldn't slip through, and real members rarely repeat a sentence across channels)*
+  - **Too similar** (`similar`). Paragraphs that are nearly the same count, so a changed emoji, a swapped word or a different link still match. *(my call on the rule)* Both texts are lowercased, links are replaced by one placeholder, and punctuation and emoji are removed. The texts then match when their word sets overlap by at least **80%**, measured as Jaccard similarity: shared words divided by all distinct words. Each new message is compared with the account's tracked messages from the window. "Copies" in the rest of this document means messages that match under the server's level.
 - **Long enough.** A message counts only if its compared text is at least **20 characters and 3 words**, roughly a sentence. Shorter messages, lone emojis and attachment-only posts never count. *(my call, from Kevin's "typically a sentence")*
 - **Window.** Copies count when they arrive within **60 seconds** of each other; specifically, within 60 seconds of the first copy being tracked. The window is fixed, not a setting. *(my call: Kevin's wave landed seconds apart)*
 - **Different channels.** Copies are counted per distinct channel. Several copies in one channel count as one channel. A thread counts as its own channel. *(my call)*
@@ -66,7 +68,7 @@ This differs from the channel trap on purpose. There, a verified member's post i
 
 - **One Honeypot card** holds both parts, each with its own switch:
   - **"Channel trap"**: the existing switch, channel picker and Kick/Ban action.
-  - **"Repeated messages"**: a new switch, plus a number field, "Kick after the same message in this many channels", default 3.
+  - **"Repeated messages"**: a new switch, a number field, "Kick after the same message in this many channels", default 3, and a "Matching" select with the three levels above, default "Word for word, ignoring case".
 - **Number range.** 2 to 10. *(my call: 2 is very strict but a server may want it; above 10 a wave would already be over)*
 - **Who can change it.** The new fields need full access, like the channel trap's: the server owner, Administrator, Manage Server, or a dashboard manager with `*`. They decide who gets kicked.
 - **Saving.** Like the channel trap's fields, the new fields are sent only when they change.
@@ -74,11 +76,12 @@ This differs from the channel trap on purpose. There, a verified member's post i
 
 ### Data
 
-Two new columns on `guilds` (Kevin pushes the schema himself, before merging):
+Three new columns on `guilds` (Kevin pushes the schema himself, before merging):
 - `is_repeat_spam_enabled` boolean, not null, default `false`.
 - `repeat_spam_channel_count` integer, not null, default `3`.
+- `repeat_spam_match_mode` text, not null, default `'ignore_case'`, one of `exact`, `ignore_case`, `similar`.
 
-Both are written only by the dashboard `PATCH`, validated to the range above, and read by the bot through the existing settings cache.
+All three are written only by the dashboard `PATCH`, validated to the range above, and read by the bot through the existing settings cache.
 
 ## Constraints
 
@@ -94,7 +97,7 @@ Both are written only by the dashboard `PATCH`, validated to the range above, an
 ## Testing
 
 **Automated, in Vitest:** the counting rules each get a test.
-- Exact match after whitespace collapse.
+- Each matching level: what matches and what doesn't, including case under `exact` and `ignore_case`, and a changed emoji, word or link under `similar` (and a clearly different sentence not matching).
 - The length floor.
 - Distinct channels: same-channel repeats don't count.
 - The window edge.
@@ -108,8 +111,9 @@ Both are written only by the dashboard `PATCH`, validated to the range above, an
 2. The same account posts a sentence 3 times in one channel. Nothing happens.
 3. Posting "gm" in 3 channels does nothing.
 4. A verified account posts one sentence in 3 channels. Nothing happens and nothing is logged.
-5. Set the count to 4. Posts in 3 channels do nothing, and a fourth channel kicks.
-6. Turn off the channel trap and leave the repeated-message check on: the check still works. Do the reverse: the trap still works.
+5. Set Matching to case-sensitive: the same sentence in 3 channels with one word's case changed does nothing. Set it to "Too similar": the sentence with a changed emoji or link in each channel kicks.
+6. Set the count to 4. Posts in 3 channels do nothing, and a fourth channel kicks.
+7. Turn off the channel trap and leave the repeated-message check on: the check still works. Do the reverse: the trap still works.
 
 ## Left to the builder
 
