@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { eq } from "drizzle-orm";
 import { guilds } from "@dragonbot/db/schema";
-import { missingScopes, requiredScopesForFields } from "@dragonbot/db/permissions";
+import { grantsScope, missingScopes, requiredScopesForFields } from "@dragonbot/db/permissions";
 import { HONEYPOT_CONFLICT_FIELDS, findHoneypotChannelConflict } from "@dragonbot/db/honeypot";
 import { db } from "@/lib/db";
 import { getUserGuildPermissions } from "@/lib/discord";
@@ -9,7 +9,6 @@ import { guildSettingsUpdateSchema } from "@/lib/validators";
 import { notifyBotReload } from "@/lib/bot-webhook";
 import {
   authenticateGuildRequest,
-  requireGuildAccess,
   invalidDataResponse,
   SETTINGS_ROUTE_BODIES,
 } from "@/lib/route-guard";
@@ -19,10 +18,17 @@ export async function GET(
   request: Request,
   { params }: { params: Promise<{ guildId: string }> },
 ) {
-  // Any guild permission grants read access
-  const access = await requireGuildAccess(request, params, { bodies: SETTINGS_ROUTE_BODIES });
-  if (!access.ok) return access.response;
-  const { guildId } = access.params;
+  const auth = await authenticateGuildRequest(request, params, SETTINGS_ROUTE_BODIES);
+  if (!auth.ok) return auth.response;
+  const { discordId, params: { guildId } } = auth;
+
+  // Any guild permission grants read access. This is the lookup checkGuildPermission makes, done
+  // here so the grants can go back to the page: viewerScopes is ["*"] for full access, otherwise the
+  // caller's guild_admins scopes, and the dashboard hides write controls a scope is missing for.
+  const viewerScopes = await getUserGuildPermissions(guildId, discordId);
+  if (!grantsScope(viewerScopes)) {
+    return NextResponse.json(SETTINGS_ROUTE_BODIES.forbidden, { status: 403 });
+  }
 
   const rows = await db.select().from(guilds).where(eq(guilds.guildId, guildId)).limit(1);
   const guild = rows[0];
@@ -31,7 +37,7 @@ export async function GET(
     return NextResponse.json({ error: "Server not found", code: "NOT_FOUND" }, { status: 404 });
   }
 
-  return NextResponse.json(toSafeGuild(guild));
+  return NextResponse.json({ ...toSafeGuild(guild), viewerScopes });
 }
 
 export async function PATCH(

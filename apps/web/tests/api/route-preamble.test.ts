@@ -127,7 +127,9 @@ interface RouteCase {
 }
 
 const routes: RouteCase[] = [
-  { name: "[guildId] GET", handler: guildRoute.GET, method: "GET", unauthorized: B401, notFound: SERVER_NOT_FOUND, forbidden: B403, perm: "check" },
+  // [guildId] GET calls getUserGuildPermissions itself (B1 follow-up, to return viewerScopes): the same
+  // lookup checkGuildPermission(guildId, user) made, which is grantsScope(getUserGuildPermissions(...)).
+  { name: "[guildId] GET", handler: guildRoute.GET, method: "GET", unauthorized: B401, notFound: SERVER_NOT_FOUND, forbidden: B403, perm: "perms" },
   { name: "[guildId] PATCH", handler: guildRoute.PATCH, method: "PATCH", unauthorized: B401, notFound: SERVER_NOT_FOUND, forbidden: B403, perm: "perms", invalid: { body: { xpMin: "x" }, withCode: true } },
   { name: "discord GET", handler: discordRoute.GET, method: "GET", unauthorized: B401, notFound: NOT_FOUND, forbidden: B403, perm: "check" },
   { name: "schedules GET", handler: schedules.GET, method: "GET", unauthorized: A401, notFound: NOT_FOUND, forbidden: A403, perm: "check" },

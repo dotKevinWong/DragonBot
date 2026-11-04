@@ -1,505 +1,21 @@
 "use client";
 
-import { useEffect, useState, useRef, useCallback, useMemo } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { useParams } from "next/navigation";
-
-interface GuildSettings {
-  guildId: string;
-  guildName: string | null;
-  verificationRoleId: string | null;
-  isVerificationSyncEnabled: boolean;
-  isBanSyncEnabled: boolean;
-  welcomeChannelId: string | null;
-  welcomeMessage: string | null;
-  isWelcomeEnabled: boolean;
-  dmWelcomeMessage: string | null;
-  isDmWelcomeEnabled: boolean;
-  logChannelId: string | null;
-  isLoggingEnabled: boolean;
-  logEvents: string[];
-  introChannelId: string | null;
-  introRoleId: string | null;
-  isIntroGateEnabled: boolean;
-  introMinChars: number;
-  introMinWords: number;
-  introMinSubstantiveWords: number;
-  introUniqueWordRatio: number;
-  introMaxRepeatedCharPct: number;
-  modNotesChannelId: string | null;
-  isHoneypotEnabled: boolean;
-  honeypotChannelId: string | null;
-  honeypotAction: "kick" | "ban";
-  isSuggestionsEnabled: boolean;
-  isAskEnabled: boolean;
-  askSystemPrompt: string | null;
-  offtopicImages: string[];
-  offtopicMessage: string | null;
-  isXpEnabled: boolean;
-  xpMin: number;
-  xpMax: number;
-  xpCooldownSeconds: number;
-  xpLevelupChannelId: string | null;
-  xpExcludedChannelIds: string[];
-  xpExcludedRoleIds: string[];
-  isBirthdayEnabled: boolean;
-  birthdayChannelId: string | null;
-  birthdayRoleId: string | null;
-  birthdayMessage: string | null;
-  birthdayTimezone: string;
-}
-
-interface DiscordChannel {
-  id: string;
-  name: string;
-  type: string;
-}
-
-interface DiscordRole {
-  id: string;
-  name: string;
-  color: string;
-}
-
-const LOG_EVENT_OPTIONS = [
-  "member_join", "member_leave", "message_delete", "message_edit",
-  "role_change", "nickname_change", "voice_activity", "kick", "ban",
-];
-
-// --- Reusable Components ---
-
-function Toggle({ checked, onChange, label }: { checked: boolean; onChange: (v: boolean) => void; label: string }) {
-  return (
-    <div className="flex items-center justify-between py-1">
-      <span className="text-sm text-dc-text-secondary">{label}</span>
-      <button
-        type="button"
-        onClick={() => onChange(!checked)}
-        className={`relative w-11 h-6 rounded-full transition-colors cursor-pointer ${checked ? "bg-dc-accent" : "bg-dc-border"}`}
-      >
-        <span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white transition-[left] ${checked ? "left-[22px]" : "left-0.5"}`} />
-      </button>
-    </div>
-  );
-}
-
-function ChannelSelect({ label, value, onChange, channels, filterType, showUnknown }: {
-  label: string;
-  value: string | null;
-  onChange: (v: string | null) => void;
-  channels: DiscordChannel[];
-  filterType?: string;
-  /** Show a stored channel that isn't in the list as "Unknown channel (<id>)" instead of "None". */
-  showUnknown?: boolean;
-}) {
-  const filtered = filterType ? channels.filter((c) => c.type === filterType) : channels.filter((c) => c.type !== "category");
-  return (
-    <div>
-      <label className="block text-xs font-semibold text-dc-text-secondary uppercase tracking-wide mb-1.5">{label}</label>
-      <select
-        className="w-full px-3 py-2 bg-dc-input border border-dc-border rounded-md text-dc-text-primary text-sm outline-none focus:border-dc-accent transition-colors cursor-pointer"
-        value={value ?? ""}
-        onChange={(e) => onChange(e.target.value || null)}
-      >
-        <option value="">None</option>
-        {showUnknown && value && !filtered.some((ch) => ch.id === value) && (
-          <option value={value}>Unknown channel ({value})</option>
-        )}
-        {filtered.map((ch) => (
-          <option key={ch.id} value={ch.id}>
-            {ch.type === "voice" ? "🔊" : "#"} {ch.name}
-          </option>
-        ))}
-      </select>
-    </div>
-  );
-}
-
-function RoleSelect({ label, value, onChange, roles }: {
-  label: string;
-  value: string | null;
-  onChange: (v: string | null) => void;
-  roles: DiscordRole[];
-}) {
-  return (
-    <div>
-      <label className="block text-xs font-semibold text-dc-text-secondary uppercase tracking-wide mb-1.5">{label}</label>
-      <select
-        className="w-full px-3 py-2 bg-dc-input border border-dc-border rounded-md text-dc-text-primary text-sm outline-none focus:border-dc-accent transition-colors cursor-pointer"
-        value={value ?? ""}
-        onChange={(e) => onChange(e.target.value || null)}
-      >
-        <option value="">None</option>
-        {roles.map((role) => (
-          <option key={role.id} value={role.id}>
-            @{role.name}
-          </option>
-        ))}
-      </select>
-    </div>
-  );
-}
-
-function PlaceholderTextarea({ label, value, onChange, placeholder, placeholders, channels }: {
-  label: string;
-  value: string;
-  onChange: (v: string) => void;
-  placeholder?: string;
-  placeholders?: { label: string; value: string }[];
-  channels?: DiscordChannel[];
-}) {
-  const editorRef = useRef<HTMLDivElement>(null);
-  const [showMentions, setShowMentions] = useState(false);
-  const [mentionFilter, setMentionFilter] = useState("");
-  const [mentionPos, setMentionPos] = useState<{ top: number; left: number }>({ top: 0, left: 0 });
-  const [triggerChar, setTriggerChar] = useState<"#" | "@">("@");
-  const isInternalChange = useRef(false);
-
-  // Convert storage format → rich HTML for contenteditable
-  function toHTML(raw: string): string {
-    let html = raw.replace(/\\n/g, "\n");
-    // Escape HTML entities in plain text
-    html = html.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-    // Restore channel mentions as styled spans
-    html = html.replace(/&lt;#(\d+)&gt;/g, (_, id) => {
-      const ch = channels?.find((c) => c.id === id);
-      const name = (ch ? ch.name : id).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-      return `<span contenteditable="false" data-channel-id="${id}" class="inline-flex items-center gap-0.5 bg-[#404675] text-[#c9cdfb] rounded px-0.5 mx-px align-baseline text-xs cursor-default">#${name}</span>`;
-    });
-    // Style {member} and {server} placeholders
-    html = html.replace(/\{(member|server)\}/g,
-      '<span contenteditable="false" class="bg-[#404675] text-[#c9cdfb] rounded px-0.5 mx-px text-xs cursor-default">{$1}</span>',
-    );
-    // Newlines to <br>
-    html = html.replace(/\n/g, "<br>");
-    return html;
-  }
-
-  // Extract storage format from the contenteditable DOM
-  function fromDOM(el: HTMLElement): string {
-    let result = "";
-    for (const node of Array.from(el.childNodes)) {
-      if (node.nodeType === Node.TEXT_NODE) {
-        result += node.textContent ?? "";
-      } else if (node.nodeName === "BR") {
-        result += "\\n";
-      } else if (node.nodeName === "DIV" || node.nodeName === "P") {
-        // Block elements from Enter key in some browsers
-        if (result.length > 0 && !result.endsWith("\\n")) result += "\\n";
-        result += fromDOM(node as HTMLElement);
-      } else if (node instanceof HTMLElement && node.dataset.channelId) {
-        result += `<#${node.dataset.channelId}>`;
-      } else if (node instanceof HTMLElement && node.textContent?.match(/^\{(member|server)\}$/)) {
-        result += node.textContent;
-      } else {
-        result += node.textContent ?? "";
-      }
-    }
-    return result;
-  }
-
-  // Sync HTML into editor when value changes externally
-  useEffect(() => {
-    if (isInternalChange.current) {
-      isInternalChange.current = false;
-      return;
-    }
-    const el = editorRef.current;
-    if (!el) return;
-    const html = toHTML(value);
-    if (el.innerHTML !== html) {
-      el.innerHTML = html || "";
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [value, channels]);
-
-  function handleInput() {
-    const el = editorRef.current;
-    if (!el) return;
-    isInternalChange.current = true;
-    const storageVal = fromDOM(el);
-    onChange(storageVal);
-
-    // Check for # or @ mention trigger
-    if (!channels || channels.length === 0) { setShowMentions(false); return; }
-    const sel = window.getSelection();
-    if (!sel || !sel.rangeCount) { setShowMentions(false); return; }
-
-    const range = sel.getRangeAt(0);
-    const textNode = range.startContainer;
-    if (textNode.nodeType !== Node.TEXT_NODE) { setShowMentions(false); return; }
-
-    const textBefore = (textNode.textContent ?? "").slice(0, range.startOffset);
-
-    // Check for # trigger first, then @
-    const hashIdx = textBefore.lastIndexOf("#");
-    const atIdx = textBefore.lastIndexOf("@");
-    const bestIdx = Math.max(hashIdx, atIdx);
-    const bestChar = bestIdx === hashIdx ? "#" : "@";
-
-    if (bestIdx >= 0) {
-      const filter = textBefore.slice(bestIdx + 1);
-      if (!filter.includes("\n") && !filter.includes(" ") && filter.length <= 30) {
-        // Get cursor position for dropdown placement
-        const cursorRect = range.getBoundingClientRect();
-        const editorRect = editorRef.current?.getBoundingClientRect();
-        if (editorRect) {
-          setMentionPos({
-            top: cursorRect.top - editorRect.top,
-            left: cursorRect.left - editorRect.left,
-          });
-        }
-        setTriggerChar(bestChar as "#" | "@");
-        setShowMentions(true);
-        setMentionFilter(filter.toLowerCase());
-        return;
-      }
-    }
-    setShowMentions(false);
-  }
-
-  function insertAtCursor(text: string) {
-    const el = editorRef.current;
-    if (!el) return;
-    el.focus();
-    const sel = window.getSelection();
-    if (!sel || !sel.rangeCount) return;
-    const range = sel.getRangeAt(0);
-    range.deleteContents();
-
-    // If it's a placeholder, insert as styled span
-    if (text === "{member}" || text === "{server}") {
-      const span = document.createElement("span");
-      span.contentEditable = "false";
-      span.className = "bg-[#404675] text-[#c9cdfb] rounded px-0.5 mx-px text-xs cursor-default";
-      span.textContent = text;
-      range.insertNode(span);
-      // Move cursor after span
-      range.setStartAfter(span);
-      range.collapse(true);
-      sel.removeAllRanges();
-      sel.addRange(range);
-    } else {
-      const textNode = document.createTextNode(text);
-      range.insertNode(textNode);
-      range.setStartAfter(textNode);
-      range.collapse(true);
-      sel.removeAllRanges();
-      sel.addRange(range);
-    }
-    handleInput();
-  }
-
-  function insertChannelMention(channel: DiscordChannel) {
-    const el = editorRef.current;
-    if (!el) return;
-    el.focus();
-
-    const sel = window.getSelection();
-    if (!sel || !sel.rangeCount) return;
-    const range = sel.getRangeAt(0);
-    const textNode = range.startContainer;
-
-    // Remove the trigger char + filter text
-    if (textNode.nodeType === Node.TEXT_NODE) {
-      const text = textNode.textContent ?? "";
-      const cursorPos = range.startOffset;
-      const beforeCursor = text.slice(0, cursorPos);
-      const trigIdx = Math.max(beforeCursor.lastIndexOf("#"), beforeCursor.lastIndexOf("@"));
-      if (trigIdx >= 0) {
-        textNode.textContent = text.slice(0, trigIdx) + text.slice(cursorPos);
-        range.setStart(textNode, trigIdx);
-        range.collapse(true);
-      }
-    }
-
-    // Insert channel span
-    const span = document.createElement("span");
-    span.contentEditable = "false";
-    span.dataset.channelId = channel.id;
-    span.className = "inline-flex items-center gap-0.5 bg-[#404675] text-[#c9cdfb] rounded px-0.5 mx-px align-baseline text-xs cursor-default";
-    span.textContent = `#${channel.name}`;
-    range.insertNode(span);
-
-    // Move cursor after
-    range.setStartAfter(span);
-    range.collapse(true);
-    sel.removeAllRanges();
-    sel.addRange(range);
-
-    setShowMentions(false);
-    setMentionFilter("");
-    handleInput();
-  }
-
-  const filteredChannels = channels?.filter((c) =>
-    c.type !== "category" && c.name.toLowerCase().includes(mentionFilter),
-  ) ?? [];
-
-  return (
-    <div>
-      {label && <label className="block text-xs font-semibold text-dc-text-secondary uppercase tracking-wide mb-1.5">{label}</label>}
-      {(placeholders || channels) && (
-        <div className="flex flex-wrap gap-1.5 mb-2">
-          {placeholders?.map((p) => (
-            <button
-              key={p.value}
-              type="button"
-              onClick={() => insertAtCursor(p.value)}
-              className="px-2 py-0.5 bg-dc-accent/20 text-dc-accent text-xs rounded hover:bg-dc-accent/30 transition-colors cursor-pointer"
-            >
-              {p.label}
-            </button>
-          ))}
-          {channels && channels.length > 0 && (
-            <span className="text-[11px] text-dc-text-muted self-center ml-1">Type # to mention a channel</span>
-          )}
-        </div>
-      )}
-      <div className="relative">
-        <div
-          ref={editorRef}
-          contentEditable
-          suppressContentEditableWarning
-          onInput={handleInput}
-          onPaste={(e) => {
-            e.preventDefault();
-            const text = e.clipboardData.getData("text/plain");
-            document.execCommand("insertText", false, text);
-          }}
-          onKeyDown={(e) => {
-            if (showMentions && e.key === "Escape") {
-              setShowMentions(false);
-              e.preventDefault();
-            }
-          }}
-          onBlur={() => setTimeout(() => setShowMentions(false), 200)}
-          data-placeholder={placeholder}
-          className="w-full px-3 py-2 bg-dc-input border border-dc-border rounded-md text-dc-text-primary text-sm outline-none focus:border-dc-accent transition-colors min-h-20 whitespace-pre-wrap empty:before:content-[attr(data-placeholder)] empty:before:text-dc-text-muted"
-        />
-        {showMentions && filteredChannels.length > 0 && (
-          <div
-            className="absolute bg-dc-bg-tertiary border border-dc-border rounded-md shadow-lg max-h-48 overflow-y-auto z-10 w-56"
-            style={{
-              bottom: `calc(100% - ${mentionPos.top}px + 4px)`,
-              left: `${Math.min(mentionPos.left, (editorRef.current?.offsetWidth ?? 224) - 224)}px`,
-            }}
-          >
-            {filteredChannels.slice(0, 10).map((ch) => (
-              <button
-                key={ch.id}
-                type="button"
-                className="w-full text-left px-3 py-1.5 text-sm text-dc-text-secondary hover:bg-dc-bg-modifier hover:text-dc-text-primary transition-colors cursor-pointer"
-                onMouseDown={(e) => { e.preventDefault(); insertChannelMention(ch); }}
-              >
-                {ch.type === "voice" ? "🔊" : "#"} {ch.name}
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function TagInput({ values, onChange, placeholder }: { values: string[]; onChange: (v: string[]) => void; placeholder?: string }) {
-  const [input, setInput] = useState("");
-
-  function handleKeyDown(e: React.KeyboardEvent) {
-    if ((e.key === "Enter" || e.key === ",") && input.trim()) {
-      e.preventDefault();
-      const val = input.trim().toLowerCase();
-      if (!values.includes(val)) onChange([...values, val]);
-      setInput("");
-    }
-    if (e.key === "Backspace" && !input && values.length > 0) {
-      onChange(values.slice(0, -1));
-    }
-  }
-
-  return (
-    <div className="flex flex-wrap gap-1.5 p-2 bg-dc-input border border-dc-border rounded-md min-h-[38px]">
-      {values.map((v) => (
-        <span key={v} className="inline-flex items-center gap-1 bg-dc-accent/20 text-dc-accent text-xs px-2 py-1 rounded">
-          {v}
-          <button type="button" onClick={() => onChange(values.filter((x) => x !== v))} className="text-dc-danger hover:text-dc-danger/80 cursor-pointer">×</button>
-        </span>
-      ))}
-      <input
-        value={input}
-        onChange={(e) => setInput(e.target.value)}
-        onKeyDown={handleKeyDown}
-        placeholder={values.length === 0 ? placeholder : ""}
-        className="flex-1 min-w-[100px] bg-transparent border-none text-dc-text-primary text-sm outline-none"
-      />
-    </div>
-  );
-}
-
-function MultiSelect({ items, selected, onChange }: {
-  items: { id: string; label: string }[];
-  selected: string[];
-  onChange: (v: string[]) => void;
-}) {
-  function toggle(id: string) {
-    if (selected.includes(id)) onChange(selected.filter((s) => s !== id));
-    else onChange([...selected, id]);
-  }
-
-  return (
-    <div className="flex flex-wrap gap-1.5 p-2 bg-dc-input border border-dc-border rounded-md min-h-[38px]">
-      {items.map((item) => (
-        <button
-          key={item.id}
-          type="button"
-          onClick={() => toggle(item.id)}
-          className={`px-2.5 py-1 rounded text-xs font-medium transition-colors cursor-pointer ${
-            selected.includes(item.id)
-              ? "bg-dc-accent/20 text-dc-accent border border-dc-accent/40"
-              : "bg-dc-bg-tertiary text-dc-text-muted border border-dc-border hover:border-dc-text-muted"
-          }`}
-        >
-          {item.label}
-        </button>
-      ))}
-      {items.length === 0 && <span className="text-xs text-dc-text-muted">No items available</span>}
-    </div>
-  );
-}
-
-function EventPicker({ selected, onChange }: { selected: string[]; onChange: (v: string[]) => void }) {
-  function toggle(opt: string) {
-    if (selected.includes(opt)) onChange(selected.filter((s) => s !== opt));
-    else onChange([...selected, opt]);
-  }
-
-  return (
-    <div className="flex flex-wrap gap-1.5">
-      {LOG_EVENT_OPTIONS.map((opt) => (
-        <button
-          key={opt}
-          type="button"
-          onClick={() => toggle(opt)}
-          className={`px-2.5 py-1 rounded text-xs font-medium transition-colors cursor-pointer ${
-            selected.includes(opt)
-              ? "bg-dc-accent/20 text-dc-accent border border-dc-accent/40"
-              : "bg-dc-bg-tertiary text-dc-text-muted border border-dc-border hover:border-dc-text-muted"
-          }`}
-        >
-          {opt}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <div className="bg-dc-bg-secondary border border-dc-border rounded-lg p-5 mb-4">
-      <h2 className="text-sm font-semibold text-dc-text-primary mb-4">{title}</h2>
-      <div className="space-y-3">{children}</div>
-    </div>
-  );
-}
+import type { GuildSettings, DiscordChannel, DiscordRole } from "@/lib/guild-settings";
+import { buildSettingsPatch } from "@/lib/settings-patch";
+import { Toggle } from "@/components/settings/toggle";
+import { ChannelSelect } from "@/components/settings/channel-select";
+import { RoleSelect } from "@/components/settings/role-select";
+import { PlaceholderTextarea } from "@/components/settings/placeholder-textarea";
+import { TagInput } from "@/components/settings/tag-input";
+import { MultiSelect } from "@/components/settings/multi-select";
+import { EventPicker } from "@/components/settings/event-picker";
+import { Section } from "@/components/settings/section";
+import { FIELD_LABEL_CLASS, TEXT_INPUT_CLASS, SELECT_CLASS } from "@/lib/form-classes";
+import { redirectIfUnauthorized } from "@/lib/client-fetch";
+import { filterTextChannels } from "@/lib/feature-list";
+import { TIMEZONES } from "@/lib/timezones";
 
 // --- Main Page ---
 
@@ -528,7 +44,7 @@ export default function ServerSettingsPage() {
       fetch(`/api/server/${guildId}/discord`, { credentials: "same-origin" }),
     ])
       .then(async ([settingsRes, discordRes]) => {
-        if (settingsRes.status === 401) { window.location.href = "/"; return; }
+        if (redirectIfUnauthorized(settingsRes)) return;
         if (settingsRes.status === 403) { setError("You don't have permission to manage this server."); setLoading(false); return; }
 
         const settingsData = await settingsRes.json();
@@ -558,65 +74,7 @@ export default function ServerSettingsPage() {
     setSaving(true);
     setMessage(null);
 
-    // Always include non-Discord fields
-    const updateFields: Record<string, unknown> = {
-      isVerificationSyncEnabled: settings.isVerificationSyncEnabled,
-      isBanSyncEnabled: settings.isBanSyncEnabled,
-      welcomeMessage: settings.welcomeMessage,
-      isWelcomeEnabled: settings.isWelcomeEnabled,
-      dmWelcomeMessage: settings.dmWelcomeMessage,
-      isDmWelcomeEnabled: settings.isDmWelcomeEnabled,
-      isLoggingEnabled: settings.isLoggingEnabled,
-      logEvents: settings.logEvents,
-      isIntroGateEnabled: settings.isIntroGateEnabled,
-      introMinChars: settings.introMinChars,
-      introMinWords: settings.introMinWords,
-      introMinSubstantiveWords: settings.introMinSubstantiveWords,
-      introUniqueWordRatio: settings.introUniqueWordRatio,
-      introMaxRepeatedCharPct: settings.introMaxRepeatedCharPct,
-      isSuggestionsEnabled: settings.isSuggestionsEnabled,
-      isAskEnabled: settings.isAskEnabled,
-      askSystemPrompt: settings.askSystemPrompt,
-      offtopicImages: settings.offtopicImages,
-      offtopicMessage: settings.offtopicMessage,
-      isXpEnabled: settings.isXpEnabled,
-      xpMin: settings.xpMin,
-      xpMax: settings.xpMax,
-      xpCooldownSeconds: settings.xpCooldownSeconds,
-      xpExcludedChannelIds: settings.xpExcludedChannelIds,
-      xpExcludedRoleIds: settings.xpExcludedRoleIds,
-      isBirthdayEnabled: settings.isBirthdayEnabled,
-      birthdayMessage: settings.birthdayMessage,
-      birthdayTimezone: settings.birthdayTimezone,
-    };
-
-    // Send the honeypot fields only when this tab changed them, so a tab loaded before another admin's change
-    // can't turn the honeypot back on, or put back an old action or channel, on an unrelated save. A save that
-    // turns the honeypot on sends all three, so what gets armed is what this tab shows.
-    const turnsHoneypotOn = settings.isHoneypotEnabled && !savedSettings?.isHoneypotEnabled;
-    if (settings.isHoneypotEnabled !== savedSettings?.isHoneypotEnabled) {
-      updateFields.isHoneypotEnabled = settings.isHoneypotEnabled;
-    }
-    if (turnsHoneypotOn || settings.honeypotAction !== savedSettings?.honeypotAction) {
-      updateFields.honeypotAction = settings.honeypotAction;
-    }
-
-    // Only include role/channel IDs if we successfully loaded Discord data
-    // (prevents overwriting with null when API was rate-limited)
-    if (hasDiscordData) {
-      updateFields.verificationRoleId = settings.verificationRoleId;
-      updateFields.welcomeChannelId = settings.welcomeChannelId;
-      updateFields.logChannelId = settings.logChannelId;
-      updateFields.introChannelId = settings.introChannelId;
-      updateFields.introRoleId = settings.introRoleId;
-      updateFields.modNotesChannelId = settings.modNotesChannelId;
-      updateFields.xpLevelupChannelId = settings.xpLevelupChannelId;
-      updateFields.birthdayChannelId = settings.birthdayChannelId;
-      updateFields.birthdayRoleId = settings.birthdayRoleId;
-      if (turnsHoneypotOn || settings.honeypotChannelId !== savedSettings?.honeypotChannelId) {
-        updateFields.honeypotChannelId = settings.honeypotChannelId;
-      }
-    }
+    const updateFields = buildSettingsPatch(settings, savedSettings, hasDiscordData);
 
     const res = await fetch(`/api/server/${guildId}`, {
       method: "PATCH",
@@ -652,7 +110,7 @@ export default function ServerSettingsPage() {
     { label: "{server}", value: "{server}" },
   ];
 
-  const textChannels = channels.filter((c) => c.type === "text" || c.type === "announcement");
+  const textChannels = filterTextChannels(channels);
   // The same filter the honeypot channel picker uses, so the guard accepts only a channel the picker can show
   const canEnableHoneypot = hasDiscordData && channels.some((c) => c.type === "text" && c.id === settings.honeypotChannelId);
 
@@ -715,7 +173,7 @@ export default function ServerSettingsPage() {
         <Toggle label="Enable logging" checked={settings.isLoggingEnabled} onChange={(v) => update("isLoggingEnabled", v)} />
         <ChannelSelect label="Log Channel" value={settings.logChannelId} onChange={(v) => update("logChannelId", v)} channels={channels} filterType="text" />
         <div>
-          <label className="block text-xs font-semibold text-dc-text-secondary uppercase tracking-wide mb-1.5">Log Events</label>
+          <label className={FIELD_LABEL_CLASS}>Log Events</label>
           <EventPicker selected={settings.logEvents} onChange={(v) => update("logEvents", v)} />
         </div>
       </Section>
@@ -726,35 +184,35 @@ export default function ServerSettingsPage() {
         <RoleSelect label="Intro Role" value={settings.introRoleId} onChange={(v) => update("introRoleId", v)} roles={roles} />
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
-            <label className="block text-xs font-semibold text-dc-text-secondary uppercase tracking-wide mb-1.5">Min Characters</label>
-            <input type="number" className="w-full px-3 py-2 bg-dc-input border border-dc-border rounded-md text-dc-text-primary text-sm outline-none focus:border-dc-accent transition-colors" value={settings.introMinChars} onChange={(e) => update("introMinChars", parseInt(e.target.value) || 0)} min={0} />
+            <label className={FIELD_LABEL_CLASS}>Min Characters</label>
+            <input type="number" className={TEXT_INPUT_CLASS} value={settings.introMinChars} onChange={(e) => update("introMinChars", parseInt(e.target.value) || 0)} min={0} />
           </div>
           <div>
-            <label className="block text-xs font-semibold text-dc-text-secondary uppercase tracking-wide mb-1.5">Min Words</label>
-            <input type="number" className="w-full px-3 py-2 bg-dc-input border border-dc-border rounded-md text-dc-text-primary text-sm outline-none focus:border-dc-accent transition-colors" value={settings.introMinWords} onChange={(e) => update("introMinWords", parseInt(e.target.value) || 0)} min={0} />
+            <label className={FIELD_LABEL_CLASS}>Min Words</label>
+            <input type="number" className={TEXT_INPUT_CLASS} value={settings.introMinWords} onChange={(e) => update("introMinWords", parseInt(e.target.value) || 0)} min={0} />
           </div>
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           <div>
-            <label className="block text-xs font-semibold text-dc-text-secondary uppercase tracking-wide mb-1.5">
+            <label className={FIELD_LABEL_CLASS}>
               Min Substantive Words
               <span className="ml-1 inline-block cursor-help text-dc-text-secondary/60" title="Words that aren't common filler (hi, hey, the, from, etc.). A real intro should mention names, majors, hobbies. Set to 0 to disable.">&#9432;</span>
             </label>
-            <input type="number" className="w-full px-3 py-2 bg-dc-input border border-dc-border rounded-md text-dc-text-primary text-sm outline-none focus:border-dc-accent transition-colors" value={settings.introMinSubstantiveWords} onChange={(e) => update("introMinSubstantiveWords", parseInt(e.target.value) || 0)} min={0} max={100} />
+            <input type="number" className={TEXT_INPUT_CLASS} value={settings.introMinSubstantiveWords} onChange={(e) => update("introMinSubstantiveWords", parseInt(e.target.value) || 0)} min={0} max={100} />
           </div>
           <div>
-            <label className="block text-xs font-semibold text-dc-text-secondary uppercase tracking-wide mb-1.5">
+            <label className={FIELD_LABEL_CLASS}>
               Unique Word Ratio %
               <span className="ml-1 inline-block cursor-help text-dc-text-secondary/60" title="Minimum percentage of words that must be unique. Catches repetitive spam like 'hi hi hi hi hi'. Set to 0 to disable.">&#9432;</span>
             </label>
-            <input type="number" className="w-full px-3 py-2 bg-dc-input border border-dc-border rounded-md text-dc-text-primary text-sm outline-none focus:border-dc-accent transition-colors" value={settings.introUniqueWordRatio} onChange={(e) => update("introUniqueWordRatio", parseInt(e.target.value) || 0)} min={0} max={100} />
+            <input type="number" className={TEXT_INPUT_CLASS} value={settings.introUniqueWordRatio} onChange={(e) => update("introUniqueWordRatio", parseInt(e.target.value) || 0)} min={0} max={100} />
           </div>
           <div>
-            <label className="block text-xs font-semibold text-dc-text-secondary uppercase tracking-wide mb-1.5">
+            <label className={FIELD_LABEL_CLASS}>
               Max Repeated Char %
               <span className="ml-1 inline-block cursor-help text-dc-text-secondary/60" title="Reject if any single character makes up more than this percentage of the message. Catches padding like 'aaaaaaa'. Set to 0 to disable.">&#9432;</span>
             </label>
-            <input type="number" className="w-full px-3 py-2 bg-dc-input border border-dc-border rounded-md text-dc-text-primary text-sm outline-none focus:border-dc-accent transition-colors" value={settings.introMaxRepeatedCharPct} onChange={(e) => update("introMaxRepeatedCharPct", parseInt(e.target.value) || 0)} min={0} max={100} />
+            <input type="number" className={TEXT_INPUT_CLASS} value={settings.introMaxRepeatedCharPct} onChange={(e) => update("introMaxRepeatedCharPct", parseInt(e.target.value) || 0)} min={0} max={100} />
           </div>
         </div>
       </Section>
@@ -781,9 +239,9 @@ export default function ServerSettingsPage() {
         {showHoneypotChannelHint && !canEnableHoneypot && <p className="text-xs text-dc-danger">Pick a channel first.</p>}
         <ChannelSelect label="Honeypot Channel" value={settings.honeypotChannelId} onChange={(v) => { setShowHoneypotChannelHint(false); update("honeypotChannelId", v); }} channels={channels} filterType="text" showUnknown />
         <div>
-          <label className="block text-xs font-semibold text-dc-text-secondary uppercase tracking-wide mb-1.5">Action</label>
+          <label className={FIELD_LABEL_CLASS}>Action</label>
           <select
-            className="w-full px-3 py-2 bg-dc-input border border-dc-border rounded-md text-dc-text-primary text-sm outline-none focus:border-dc-accent transition-colors cursor-pointer"
+            className={SELECT_CLASS}
             value={settings.honeypotAction}
             onChange={(e) => update("honeypotAction", e.target.value === "ban" ? "ban" : "kick")}
           >
@@ -807,7 +265,7 @@ export default function ServerSettingsPage() {
       <Section title="AI / Ask">
         <Toggle label="Enable /ask command" checked={settings.isAskEnabled} onChange={(v) => update("isAskEnabled", v)} />
         <div>
-          <label className="block text-xs font-semibold text-dc-text-secondary uppercase tracking-wide mb-1.5">System Prompt</label>
+          <label className={FIELD_LABEL_CLASS}>System Prompt</label>
           <textarea
             className="w-full px-3 py-2 bg-dc-input border border-dc-border rounded-md text-dc-text-primary text-sm outline-none focus:border-dc-accent transition-colors resize-y min-h-24"
             value={settings.askSystemPrompt ?? ""}
@@ -826,7 +284,7 @@ export default function ServerSettingsPage() {
           channels={textChannels}
         />
         <div>
-          <label className="block text-xs font-semibold text-dc-text-secondary uppercase tracking-wide mb-1.5">Image URLs</label>
+          <label className={FIELD_LABEL_CLASS}>Image URLs</label>
           <TagInput values={settings.offtopicImages} onChange={(v) => update("offtopicImages", v)} placeholder="Paste image URL and press Enter" />
         </div>
       </Section>
@@ -835,29 +293,29 @@ export default function ServerSettingsPage() {
         <Toggle label="Enable XP system" checked={settings.isXpEnabled} onChange={(v) => update("isXpEnabled", v)} />
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           <div>
-            <label className="block text-xs font-semibold text-dc-text-secondary uppercase tracking-wide mb-1.5">Min XP per Message</label>
-            <input type="number" className="w-full px-3 py-2 bg-dc-input border border-dc-border rounded-md text-dc-text-primary text-sm outline-none focus:border-dc-accent transition-colors" value={settings.xpMin} onChange={(e) => update("xpMin", parseInt(e.target.value) || 1)} min={1} max={1000} />
+            <label className={FIELD_LABEL_CLASS}>Min XP per Message</label>
+            <input type="number" className={TEXT_INPUT_CLASS} value={settings.xpMin} onChange={(e) => update("xpMin", parseInt(e.target.value) || 1)} min={1} max={1000} />
           </div>
           <div>
-            <label className="block text-xs font-semibold text-dc-text-secondary uppercase tracking-wide mb-1.5">Max XP per Message</label>
-            <input type="number" className="w-full px-3 py-2 bg-dc-input border border-dc-border rounded-md text-dc-text-primary text-sm outline-none focus:border-dc-accent transition-colors" value={settings.xpMax} onChange={(e) => update("xpMax", parseInt(e.target.value) || 1)} min={1} max={1000} />
+            <label className={FIELD_LABEL_CLASS}>Max XP per Message</label>
+            <input type="number" className={TEXT_INPUT_CLASS} value={settings.xpMax} onChange={(e) => update("xpMax", parseInt(e.target.value) || 1)} min={1} max={1000} />
           </div>
           <div>
-            <label className="block text-xs font-semibold text-dc-text-secondary uppercase tracking-wide mb-1.5">Cooldown (seconds)</label>
-            <input type="number" className="w-full px-3 py-2 bg-dc-input border border-dc-border rounded-md text-dc-text-primary text-sm outline-none focus:border-dc-accent transition-colors" value={settings.xpCooldownSeconds} onChange={(e) => update("xpCooldownSeconds", parseInt(e.target.value) || 0)} min={0} max={3600} />
+            <label className={FIELD_LABEL_CLASS}>Cooldown (seconds)</label>
+            <input type="number" className={TEXT_INPUT_CLASS} value={settings.xpCooldownSeconds} onChange={(e) => update("xpCooldownSeconds", parseInt(e.target.value) || 0)} min={0} max={3600} />
           </div>
         </div>
         <ChannelSelect label="Level-up Announcement Channel" value={settings.xpLevelupChannelId} onChange={(v) => update("xpLevelupChannelId", v)} channels={channels} filterType="text" />
         <div>
-          <label className="block text-xs font-semibold text-dc-text-secondary uppercase tracking-wide mb-1.5">Excluded Channels (no XP earned)</label>
+          <label className={FIELD_LABEL_CLASS}>Excluded Channels (no XP earned)</label>
           <MultiSelect
-            items={channels.filter((c) => c.type === "text" || c.type === "announcement").map((c) => ({ id: c.id, label: `# ${c.name}` }))}
+            items={filterTextChannels(channels).map((c) => ({ id: c.id, label: `# ${c.name}` }))}
             selected={settings.xpExcludedChannelIds}
             onChange={(v) => update("xpExcludedChannelIds", v)}
           />
         </div>
         <div>
-          <label className="block text-xs font-semibold text-dc-text-secondary uppercase tracking-wide mb-1.5">Excluded Roles (no XP earned)</label>
+          <label className={FIELD_LABEL_CLASS}>Excluded Roles (no XP earned)</label>
           <MultiSelect
             items={roles.map((r) => ({ id: r.id, label: `@ ${r.name}` }))}
             selected={settings.xpExcludedRoleIds}
@@ -871,7 +329,7 @@ export default function ServerSettingsPage() {
         <ChannelSelect label="Birthday Announcement Channel" value={settings.birthdayChannelId} onChange={(v) => update("birthdayChannelId", v)} channels={channels} filterType="text" />
         <RoleSelect label="Birthday Role (assigned for the day)" value={settings.birthdayRoleId} onChange={(v) => update("birthdayRoleId", v)} roles={roles} />
         <div>
-          <label className="block text-xs font-semibold text-dc-text-secondary uppercase tracking-wide mb-1.5">Custom Message (optional)</label>
+          <label className={FIELD_LABEL_CLASS}>Custom Message (optional)</label>
           <textarea
             className="w-full px-3 py-2 bg-dc-input border border-dc-border rounded-md text-dc-text-primary text-sm outline-none focus:border-dc-accent resize-y min-h-16 transition-colors"
             value={settings.birthdayMessage ?? ""}
@@ -881,13 +339,13 @@ export default function ServerSettingsPage() {
           <p className="text-xs text-dc-text-muted mt-1">Use <code className="text-dc-accent">{"{user}"}</code> for the mention and <code className="text-dc-accent">{"{age}"}</code> for the ordinal age (e.g. 27th). Leave blank for default.</p>
         </div>
         <div>
-          <label className="block text-xs font-semibold text-dc-text-secondary uppercase tracking-wide mb-1.5">Timezone</label>
+          <label className={FIELD_LABEL_CLASS}>Timezone</label>
           <select
             className="w-full px-3 py-2 bg-dc-input border border-dc-border rounded-md text-dc-text-primary text-sm outline-none focus:border-dc-accent cursor-pointer transition-colors"
             value={settings.birthdayTimezone}
             onChange={(e) => update("birthdayTimezone", e.target.value)}
           >
-            {["America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles", "America/Anchorage", "Pacific/Honolulu", "Europe/London", "Europe/Paris", "Asia/Tokyo", "UTC"].map((tz) => (
+            {TIMEZONES.map((tz) => (
               <option key={tz} value={tz}>{tz}</option>
             ))}
           </select>

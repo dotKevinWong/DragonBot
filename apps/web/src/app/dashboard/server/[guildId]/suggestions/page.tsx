@@ -2,6 +2,10 @@
 
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
+import { redirectIfUnauthorized } from "@/lib/client-fetch";
+import { STATUS_FILTERS, type StatusFilter } from "@/lib/suggestion-filters";
+import { canWriteScope, missingScopeNote } from "@/lib/viewer-scopes";
+import { useViewerScopes } from "@/lib/use-viewer-scopes";
 
 interface Suggestion {
   id: string;
@@ -13,8 +17,7 @@ interface Suggestion {
   createdAt: string;
 }
 
-type StatusFilter = "all" | "pending" | "approved" | "rejected" | "completed" | "archived";
-
+// The status dropdown leaves out "archived" on purpose: archiving has its own button.
 const STATUS_OPTIONS = ["pending", "approved", "rejected", "completed"] as const;
 
 const STATUS_COLORS: Record<string, string> = {
@@ -34,11 +37,12 @@ export default function SuggestionsPage() {
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [filter, setFilter] = useState<StatusFilter>("all");
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  const canWrite = canWriteScope(useViewerScopes(guildId), "suggestions");
 
   useEffect(() => {
     fetch(`/api/server/${guildId}/suggestions`, { credentials: "same-origin" })
       .then(async (res) => {
-        if (res.status === 401) { window.location.href = "/"; return; }
+        if (redirectIfUnauthorized(res)) return;
         if (res.status === 403) { setError("No permission."); setLoading(false); return; }
         if (res.ok) setSuggestions(await res.json());
         setLoading(false);
@@ -107,6 +111,8 @@ export default function SuggestionsPage() {
         <p className="text-dc-text-muted text-sm mt-0.5">Review and manage feature suggestions from members</p>
       </div>
 
+      {!canWrite && <p className="text-dc-text-muted text-sm mb-6">{missingScopeNote("suggestions")}</p>}
+
       {message && (
         <div className={`px-4 py-3 rounded-md mb-6 text-sm ${
           message.type === "success"
@@ -119,7 +125,7 @@ export default function SuggestionsPage() {
 
       {/* Filter tabs */}
       <div className="flex gap-1 mb-6 overflow-x-auto">
-        {(["all", "pending", "approved", "rejected", "completed", "archived"] as const).map((f) => (
+        {STATUS_FILTERS.map((f) => (
           <button
             key={f}
             onClick={() => setFilter(f)}
@@ -161,41 +167,43 @@ export default function SuggestionsPage() {
                 {new Date(s.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" })}
               </p>
             </div>
-            <div className="flex items-center gap-1.5 shrink-0">
-              {s.status === "archived" ? (
-                <button
-                  onClick={() => handleUnarchive(s.id)}
-                  className="px-2 py-1 text-xs text-dc-text-muted hover:text-dc-accent transition-colors cursor-pointer"
-                >
-                  Unarchive
-                </button>
-              ) : (
-                <>
-                  <select
-                    className="px-2 py-1 bg-dc-input border border-dc-border rounded-md text-dc-text-primary text-xs outline-none focus:border-dc-accent cursor-pointer"
-                    value={s.status}
-                    onChange={(e) => handleStatusChange(s.id, e.target.value)}
-                  >
-                    {STATUS_OPTIONS.map((opt) => (
-                      <option key={opt} value={opt}>{opt.charAt(0).toUpperCase() + opt.slice(1)}</option>
-                    ))}
-                  </select>
+            {canWrite && (
+              <div className="flex items-center gap-1.5 shrink-0">
+                {s.status === "archived" ? (
                   <button
-                    onClick={() => setDeleteConfirmId(s.id)}
-                    className="text-dc-text-muted hover:text-dc-danger transition-colors cursor-pointer text-xs px-1"
-                    title="Archive"
+                    onClick={() => handleUnarchive(s.id)}
+                    className="px-2 py-1 text-xs text-dc-text-muted hover:text-dc-accent transition-colors cursor-pointer"
                   >
-                    Archive
+                    Unarchive
                   </button>
-                </>
-              )}
-            </div>
+                ) : (
+                  <>
+                    <select
+                      className="px-2 py-1 bg-dc-input border border-dc-border rounded-md text-dc-text-primary text-xs outline-none focus:border-dc-accent cursor-pointer"
+                      value={s.status}
+                      onChange={(e) => handleStatusChange(s.id, e.target.value)}
+                    >
+                      {STATUS_OPTIONS.map((opt) => (
+                        <option key={opt} value={opt}>{opt.charAt(0).toUpperCase() + opt.slice(1)}</option>
+                      ))}
+                    </select>
+                    <button
+                      onClick={() => setDeleteConfirmId(s.id)}
+                      className="text-dc-text-muted hover:text-dc-danger transition-colors cursor-pointer text-xs px-1"
+                      title="Archive"
+                    >
+                      Archive
+                    </button>
+                  </>
+                )}
+              </div>
+            )}
           </div>
         </div>
       ))}
 
       {/* Delete confirmation modal */}
-      {deleteConfirmId !== null && (
+      {deleteConfirmId !== null && canWrite && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={() => setDeleteConfirmId(null)}>
           <div className="bg-dc-bg-secondary border border-dc-border rounded-lg p-6 max-w-sm w-full mx-4 shadow-xl" onClick={(e) => e.stopPropagation()}>
             <h3 className="text-lg font-semibold text-dc-text-primary mb-2">Archive Suggestion</h3>

@@ -3,6 +3,20 @@
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { CronBuilder } from "@/components/cron-builder";
+import type { DiscordChannel } from "@/lib/guild-settings";
+import { cronToHuman } from "@/lib/cron-text";
+import { TIMEZONES } from "@/lib/timezones";
+import { canWriteScope, missingScopeNote } from "@/lib/viewer-scopes";
+import { useViewerScopes } from "@/lib/use-viewer-scopes";
+import {
+  createFeatureItem,
+  deleteFeatureItem,
+  filterTextChannels,
+  loadFeatureList,
+  saveFeatureItemEdit,
+  toggleFeatureItem,
+  type FeatureList,
+} from "@/lib/feature-list";
 
 interface Schedule {
   id: string;
@@ -17,49 +31,6 @@ interface Schedule {
   embedTitle: string | null;
   lastRunAt: string | null;
   createdBy: string;
-}
-
-interface DiscordChannel {
-  id: string;
-  name: string;
-  type: string;
-}
-
-const TIMEZONES = [
-  "America/New_York",
-  "America/Chicago",
-  "America/Denver",
-  "America/Los_Angeles",
-  "America/Anchorage",
-  "Pacific/Honolulu",
-  "Europe/London",
-  "Europe/Paris",
-  "Asia/Tokyo",
-  "UTC",
-];
-
-function cronToHuman(cron: string): string {
-  const parts = cron.split(" ");
-  if (parts.length !== 5) return cron;
-  const [min, hour, , , dow] = parts;
-
-  if (min.startsWith("*/") && hour === "*") return `Every ${min.slice(2)} min`;
-  if (min === "0" && hour === "*") return "Hourly";
-  if (min === "0" && hour.startsWith("*/")) return `Every ${hour.slice(2)}h`;
-
-  const h = parseInt(hour);
-  const m = parseInt(min);
-  if (!isNaN(h) && !isNaN(m)) {
-    const period = h >= 12 ? "PM" : "AM";
-    const h12 = h === 0 ? 12 : h > 12 ? h - 12 : h;
-    const timeStr = m === 0 ? `${h12}${period}` : `${h12}:${m.toString().padStart(2, "0")}${period}`;
-    if (dow === "*") return `Daily ${timeStr}`;
-    if (dow === "1-5") return `Weekdays ${timeStr}`;
-    const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-    const d = parseInt(dow);
-    if (!isNaN(d) && d >= 0 && d <= 6) return `${days[d]} ${timeStr}`;
-  }
-  return cron;
 }
 
 export default function SchedulesPage() {
@@ -85,32 +56,25 @@ export default function SchedulesPage() {
   const [editData, setEditData] = useState<Partial<Schedule>>({});
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const [showReloadHint, setShowReloadHint] = useState(false);
+  const canWrite = canWriteScope(useViewerScopes(guildId), "schedules");
 
   useEffect(() => {
-    Promise.all([
-      fetch(`/api/server/${guildId}/schedules`, { credentials: "same-origin" }),
-      fetch(`/api/server/${guildId}/discord`, { credentials: "same-origin" }),
-    ]).then(async ([schedRes, discordRes]) => {
-      if (schedRes.status === 401) { window.location.href = "/"; return; }
-      if (schedRes.status === 403) { setError("No permission."); setLoading(false); return; }
-      if (schedRes.ok) setSchedules(await schedRes.json());
-      if (discordRes.ok) {
-        const data = await discordRes.json();
-        setChannels(data.channels ?? []);
-      }
-      setLoading(false);
-    }).catch(() => { setError("Failed to load."); setLoading(false); });
+    loadFeatureList({ guildId, resource: "schedules", setItems: setSchedules, setChannels, setError, setLoading });
   }, [guildId]);
 
-  async function handleCreate() {
-    setSaving(true);
-    setMessage(null);
+  const list: FeatureList<Schedule> = {
+    basePath: `/api/server/${guildId}/schedules`,
+    items: schedules,
+    setItems: setSchedules,
+    setSaving,
+    setMessage,
+    onChanged: () => setShowReloadHint(true),
+  };
 
-    const res = await fetch(`/api/server/${guildId}/schedules`, {
-      method: "POST",
-      credentials: "same-origin",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
+  async function handleCreate() {
+    await createFeatureItem(
+      list,
+      {
         channelId: formChannel,
         message: formMessage,
         cronExpression: formCron,
@@ -118,36 +82,18 @@ export default function SchedulesPage() {
         isEmbed: formIsEmbed,
         embedTitle: formIsEmbed && formEmbedTitle ? formEmbedTitle : null,
         embedColor: formIsEmbed ? formEmbedColor : null,
-      }),
-    });
-
-    if (res.ok) {
-      const newSchedule = await res.json();
-      setSchedules([...schedules, newSchedule]);
-      setShowForm(false);
-      setFormMessage("");
-      setFormEmbedTitle("");
-      setMessage({ type: "success", text: "Schedule created!" });
-      setShowReloadHint(true);
-    } else {
-      const data = await res.json();
-      setMessage({ type: "error", text: data.error ?? "Failed to create." });
-    }
-    setSaving(false);
+      },
+      "Schedule created!",
+      () => {
+        setShowForm(false);
+        setFormMessage("");
+        setFormEmbedTitle("");
+      },
+    );
   }
 
   async function handleToggle(id: string, currentlyEnabled: boolean) {
-    const res = await fetch(`/api/server/${guildId}/schedules/${id}`, {
-      method: "PATCH",
-      credentials: "same-origin",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ isEnabled: !currentlyEnabled }),
-    });
-    if (res.ok) {
-      const updated = await res.json();
-      setSchedules(schedules.map((s) => (s.id === id ? updated : s)));
-      setShowReloadHint(true);
-    }
+    await toggleFeatureItem(list, id, currentlyEnabled);
   }
 
   function startEdit(s: Schedule) {
@@ -164,42 +110,17 @@ export default function SchedulesPage() {
   }
 
   async function handleSaveEdit() {
-    if (editingId === null) return;
-    setSaving(true);
-    const res = await fetch(`/api/server/${guildId}/schedules/${editingId}`, {
-      method: "PATCH",
-      credentials: "same-origin",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(editData),
-    });
-    if (res.ok) {
-      const updated = await res.json();
-      setSchedules(schedules.map((s) => (s.id === editingId ? updated : s)));
+    await saveFeatureItemEdit(list, editingId, editData, "Schedule updated!", () => {
       setEditingId(null);
       setEditData({});
-      setMessage({ type: "success", text: "Schedule updated!" });
-      setShowReloadHint(true);
-    } else {
-      const data = await res.json();
-      setMessage({ type: "error", text: data.error ?? "Failed to update." });
-    }
-    setSaving(false);
+    });
   }
 
   async function handleDelete(id: string) {
-    const res = await fetch(`/api/server/${guildId}/schedules/${id}`, {
-      method: "DELETE",
-      credentials: "same-origin",
-    });
-    if (res.ok) {
-      setSchedules(schedules.filter((s) => s.id !== id));
-      setMessage({ type: "success", text: "Schedule deleted." });
-      setShowReloadHint(true);
-    }
-    setDeleteConfirmId(null);
+    await deleteFeatureItem(list, id, "Schedule deleted.", () => setDeleteConfirmId(null));
   }
 
-  const textChannels = channels.filter((c) => c.type === "text" || c.type === "announcement");
+  const textChannels = filterTextChannels(channels);
 
   if (loading) {
     return (
@@ -217,13 +138,17 @@ export default function SchedulesPage() {
           <h1 className="text-2xl font-bold">Scheduled Messages</h1>
           <p className="text-dc-text-muted text-sm mt-0.5">Automated messages sent on a schedule</p>
         </div>
-        <button
-          onClick={() => setShowForm(!showForm)}
-          className="px-4 py-2 bg-dc-accent hover:bg-dc-accent-hover text-white text-sm font-medium rounded-md transition-colors cursor-pointer"
-        >
-          {showForm ? "Cancel" : "+ New Schedule"}
-        </button>
+        {canWrite && (
+          <button
+            onClick={() => setShowForm(!showForm)}
+            className="px-4 py-2 bg-dc-accent hover:bg-dc-accent-hover text-white text-sm font-medium rounded-md transition-colors cursor-pointer"
+          >
+            {showForm ? "Cancel" : "+ New Schedule"}
+          </button>
+        )}
       </div>
+
+      {!canWrite && <p className="text-dc-text-muted text-sm mb-6">{missingScopeNote("schedules")}</p>}
 
       {message && (
         <div className={`px-4 py-3 rounded-md mb-6 text-sm ${
@@ -246,7 +171,7 @@ export default function SchedulesPage() {
       )}
 
       {/* New schedule form */}
-      {showForm && (
+      {showForm && canWrite && (
         <div className="bg-dc-bg-secondary border border-dc-border rounded-lg p-5 mb-6">
           <h2 className="text-sm font-semibold text-dc-text-primary mb-4">New Scheduled Message</h2>
           <div className="space-y-3">
@@ -340,16 +265,16 @@ export default function SchedulesPage() {
       )}
 
       {/* Schedule list */}
-      {schedules.length === 0 && !showForm && (
+      {schedules.length === 0 && !(showForm && canWrite) && (
         <div className="bg-dc-bg-secondary border border-dc-border rounded-lg p-8 text-center">
           <p className="text-dc-text-muted">No scheduled messages yet.</p>
-          <p className="text-dc-text-muted text-sm mt-1">Click &quot;+ New Schedule&quot; to create one.</p>
+          {canWrite && <p className="text-dc-text-muted text-sm mt-1">Click &quot;+ New Schedule&quot; to create one.</p>}
         </div>
       )}
 
       {schedules.map((s, idx) => {
         const channelName = channels.find((c) => c.id === s.channelId)?.name ?? s.channelId;
-        const isEditing = editingId === s.id;
+        const isEditing = canWrite && editingId === s.id;
 
         if (isEditing) {
           return (
@@ -425,33 +350,35 @@ export default function SchedulesPage() {
                   {s.lastRunAt && ` · Last: ${new Date(s.lastRunAt).toLocaleString()}`}
                 </p>
               </div>
-              <div className="flex items-center gap-2 ml-3 shrink-0">
-                <button
-                  onClick={() => startEdit(s)}
-                  className="text-dc-text-muted hover:text-dc-accent transition-colors cursor-pointer text-xs"
-                >
-                  Edit
-                </button>
-                <button
-                  onClick={() => handleToggle(s.id, s.isEnabled)}
-                  className={`relative w-10 h-5 rounded-full transition-colors cursor-pointer ${s.isEnabled ? "bg-dc-accent" : "bg-dc-border"}`}
-                >
-                  <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-[left] ${s.isEnabled ? "left-[20px]" : "left-0.5"}`} />
-                </button>
-                <button
-                  onClick={() => setDeleteConfirmId(s.id)}
-                  className="text-dc-text-muted hover:text-dc-danger transition-colors cursor-pointer text-sm"
-                >
-                  ✕
-                </button>
-              </div>
+              {canWrite && (
+                <div className="flex items-center gap-2 ml-3 shrink-0">
+                  <button
+                    onClick={() => startEdit(s)}
+                    className="text-dc-text-muted hover:text-dc-accent transition-colors cursor-pointer text-xs"
+                  >
+                    Edit
+                  </button>
+                  <button
+                    onClick={() => handleToggle(s.id, s.isEnabled)}
+                    className={`relative w-10 h-5 rounded-full transition-colors cursor-pointer ${s.isEnabled ? "bg-dc-accent" : "bg-dc-border"}`}
+                  >
+                    <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-[left] ${s.isEnabled ? "left-[20px]" : "left-0.5"}`} />
+                  </button>
+                  <button
+                    onClick={() => setDeleteConfirmId(s.id)}
+                    className="text-dc-text-muted hover:text-dc-danger transition-colors cursor-pointer text-sm"
+                  >
+                    ✕
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         );
       })}
 
       {/* Delete confirmation modal */}
-      {deleteConfirmId !== null && (
+      {deleteConfirmId !== null && canWrite && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={() => setDeleteConfirmId(null)}>
           <div className="bg-dc-bg-secondary border border-dc-border rounded-lg p-6 max-w-sm w-full mx-4 shadow-xl" onClick={(e) => e.stopPropagation()}>
             <h3 className="text-lg font-semibold text-dc-text-primary mb-2">Delete Schedule</h3>

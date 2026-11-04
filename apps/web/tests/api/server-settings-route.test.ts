@@ -109,7 +109,33 @@ describe("GET /api/server/[guildId]", () => {
     const text = await res.text();
     const expected = guildRow() as Record<string, unknown>;
     delete expected.id;
-    expect(text).toBe(JSON.stringify(expected));
+    // B1 follow-up: the caller's grants are appended after the row's own keys
+    expect(text).toBe(JSON.stringify({ ...expected, viewerScopes: ["*"] }));
+  });
+
+  it("viewerScopes is the caller's grant list from one permission lookup", async () => {
+    for (const perms of [["*"], ["schedules"], ["welcome", "youtube"], ["suggestions", "*"]]) {
+      state.perms = perms;
+      state.selectQueue = [[guildRow()]];
+      mocks.getUserGuildPermissions.mockClear();
+      const res = await guildRoute.GET(new Request("http://localhost"), { params: Promise.resolve({ guildId: GUILD }) });
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.viewerScopes).toEqual(perms);
+      expect(Object.keys(body).at(-1)).toBe("viewerScopes");
+      expect(mocks.getUserGuildPermissions).toHaveBeenCalledTimes(1);
+      expect(mocks.getUserGuildPermissions.mock.calls[0]).toEqual([GUILD, USER]);
+      expect(mocks.checkGuildPermission).not.toHaveBeenCalled();
+    }
+  });
+
+  it("no grants: 403 before the guild row is read", async () => {
+    state.perms = [];
+    state.selectQueue = [[guildRow()]];
+    const res = await guildRoute.GET(new Request("http://localhost"), { params: Promise.resolve({ guildId: GUILD }) });
+    expect(res.status).toBe(403);
+    expect(await res.text()).toBe('{"error":"Forbidden","code":"UNAUTHORIZED"}');
+    expect(state.calls).toEqual([]);
   });
 
   it("missing row gives Server not found", async () => {

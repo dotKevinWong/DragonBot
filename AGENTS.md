@@ -21,7 +21,7 @@ DragonBot is a multi-guild Discord bot for university communities. It provides e
 - **Logging:** pino (structured JSON) in the bot
 - **Validation:** zod
 - **Scheduling:** node-cron
-- **Testing:** Vitest (bot only; the web app has no tests)
+- **Testing:** Vitest (bot tests in `apps/bot/tests`, web tests in `apps/web/tests`)
 
 ## Project Structure
 
@@ -63,7 +63,7 @@ pnpm-workspace.yaml       Lists apps/*, packages/* and scripts (no scripts/ dire
 | `honeypot.service.ts` | In-memory honeypot state (cases, action records, late window, own-deletion marks, per-key mutex, shutdown drain) plus pure helpers (`decideHoneypot`, `isHoneypotReason`, `isHoneypotKickReason`, `warningText`) and constants. No Discord calls | TTLCache |
 | `logging.service.ts` | `shouldLog(guildId, LogEventType)`, `sendLogEmbed`, `sendNotice` (ignores event toggles) | GuildService, **discord.js**, `utils/guild-channel` |
 | `moderation.service.ts` | `syncBan`: ban in every other ban-sync server; disables sync on Unknown Guild | GuildService, **discord.js** |
-| `scheduled-message.service.ts` | `listByGuild`, `getAllEnabled`, `getById`, `updateLastRun`, `cronToHuman` (the bot's only cron formatter; the web has its own). Read-only: the web writes the table | ScheduledMessageRepository |
+| `scheduled-message.service.ts` | `listByGuild`, `getAllEnabled`, `getById`, `updateLastRun`, `cronToHuman` (the bot's only cron formatter; the web has its own two in `apps/web/src/lib/cron-text.ts`). Read-only: the web writes the table | ScheduledMessageRepository |
 | `suggestion.service.ts` | `create` (checks `is_suggestions_enabled`) | SuggestionRepository, GuildRepository |
 | `user.service.ts` | `getProfile`, `isVerified` (24h cache), `markBanned` | UserRepository |
 | `verification.service.ts` | `initiateVerification`, `confirmVerification`; domain allowlist, 6 hex-char code (`randomBytes(3)`), 30-min expiry, timing-safe compare | VerificationRepository, GuildRepository, UserRepository, EmailService |
@@ -91,13 +91,25 @@ pnpm-workspace.yaml       Lists apps/*, packages/* and scripts (no scripts/ dire
 | `lib/validators.ts` | `DISCORD_SNOWFLAKE_RE`, `cronExpressionSchema`, `embedColorSchema`, `profileUpdateSchema`, `guildSettingsUpdateSchema` |
 | `lib/route-guard.ts` | Guild route guard: `authenticateGuildRequest` (401, then 404 for a bad snowflake or UUID param), `requireGuildAccess` (adds the 403 permission check), per-route frozen error bodies (`FEATURE_ROUTE_BODIES`, `SETTINGS_ROUTE_BODIES`, `DISCORD_ROUTE_BODIES`; routes differ on purpose), `invalidDataResponse` (400 zod body) |
 | `lib/safe-rows.ts` | `toSafeGuild`, `toSafeUser`: denylists that strip server-only columns before a row is sent to the browser; add each new sensitive column here |
+| `lib/guild-settings.ts` | Types for the settings page: `GuildSettings` (the GET body without `viewerScopes`, written by hand because `GuildRow` has more columns), `DiscordChannel` (the one client channel type; also used by the schedules and YouTube pages), `DiscordRole` |
+| `lib/settings-patch.ts` | `buildSettingsPatch(settings, saved, hasDiscordData)`: the settings page's PATCH body (always-sent fields, honeypot fields only when changed, channel/role IDs only with Discord data); key set and order pinned by `tests/lib/settings-patch.test.ts` |
+| `lib/form-classes.ts` | `FIELD_LABEL_CLASS`, `TEXT_INPUT_CLASS`, `SELECT_CLASS`: class strings repeated across dashboard forms (only byte-identical copies use them) |
+| `lib/client-fetch.ts` | Browser fetch helpers: `redirectIfUnauthorized(res)` (on a 401 sets `window.location.href = "/"` and returns true; used by the six load checks: layout, settings, leaderboard, suggestions, profile, and `loadFeatureList`), `getSameOrigin`, `sendJson(url, "POST" \| "PATCH", body)`, `sendDelete` (raw `Response`, `credentials: "same-origin"`) |
+| `lib/feature-list.ts` | Schedules and YouTube pages' list helpers, called with the page's setters: `loadFeatureList` (list + `/discord` + optional extra GET in one `Promise.all`; 403 "No permission.", catch "Failed to load."), `createFeatureItem`, `toggleFeatureItem`, `saveFeatureItemEdit`, `deleteFeatureItem` (per-page success text; optional `onChanged`, which only schedules uses for its reload hint), `filterTextChannels` (text + announcement). Requests and setter order pinned against the old page code by `tests/lib/feature-pages.test.ts` |
+| `lib/cron-text.ts` | `cronToHuman` (schedules list: "Daily 9AM"), `describeCron` (CronBuilder preview: "At 9 AM, every day"), shared `formatTime12h(h, m, { spaced })`. The two formatters differ on purpose; pinned by `tests/lib/cron-text.test.ts` |
+| `lib/timezones.ts` | `TIMEZONES`: the 10 dropdown timezones (schedules form and editor, settings birthday timezone) |
+| `lib/viewer-scopes.ts` | `canWriteScope(viewerScopes, scope)`: whether a feature page shows its write controls (`grantsScope`: the scope or `*`; grants not known yet count as allowed, the server still enforces), `missingScopeNote(scope)` ("You need the {scope} permission to make changes."); pinned by `tests/lib/viewer-scopes.test.ts` |
+| `lib/use-viewer-scopes.ts` | `useViewerScopes(guildId)`: reads `viewerScopes` from `GET /api/server/[guildId]` for the schedules and suggestions pages (the YouTube page reads it from its existing extra GET); any failure leaves it unknown |
+| `lib/suggestion-filters.ts` | `STATUS_FILTERS` (`"all"` + `SUGGESTION_STATUSES`) and `StatusFilter` for the suggestions page tabs; the status dropdown's 4 values (no `archived`) stay in the page |
 | `app/api/**/route.ts` | API routes (table below) |
 | `app/page.tsx`, `app/oauth/page.tsx` | Landing page; token exchange page |
-| `app/dashboard/layout.tsx` | Sidebar shell (`GET /api/guilds`, `GET /api/auth`) |
+| `app/dashboard/layout.tsx` | Sidebar shell (`GET /api/guilds`, `GET /api/auth`, once per dashboard visit: the sidebar links are `next/link` `<Link prefetch={false}>`, so the layout stays mounted; active links follow `usePathname`); pinned against the old `<a href>` markup by `tests/components/dashboard-layout.test.ts` |
 | `app/dashboard/profile/page.tsx` | Profile editor |
 | `app/dashboard/server/[guildId]/` | `page.tsx` (settings), `schedules/`, `suggestions/`, `youtube/`, `leaderboard/` |
 | `app/leaderboard/[guildId]/page.tsx` | Public leaderboard |
-| `components/cron-builder.tsx` | `CronBuilder` (single / multiple / advanced modes); the only shared component |
+| `components/cron-builder.tsx` | `CronBuilder` (single / multiple / advanced modes; preview text from `describeCron` in `lib/cron-text.ts`) |
+| `components/leaderboard-table.tsx` | `LeaderboardTable({ entries })`: the table both leaderboard pages render (each page keeps its own loading, error, empty state, header and footer); pinned by `tests/components/leaderboard-table.test.ts` |
+| `components/settings/` | Settings page controls, one per file: `Toggle`, `ChannelSelect`, `RoleSelect`, `PlaceholderTextarea`, `TagInput`, `MultiSelect`, `EventPicker` (buttons from `LOG_EVENTS` in `@dragonbot/db/contracts`), `Section` |
 
 ### packages/db/src
 
@@ -126,7 +138,7 @@ pnpm --filter web dev                     # Web only (port 3000)
 pnpm --filter @dragonbot/db db:push       # Push schema to Neon (db:generate, db:migrate, db:studio also exist)
 pnpm build                                # Build all packages (bot and db builds are echo stubs)
 pnpm typecheck                            # tsc --noEmit across workspace
-pnpm test                                 # Vitest across workspace (only the bot has tests)
+pnpm test                                 # Vitest across workspace (bot and web have tests)
 # pnpm lint runs turbo lint, but no package defines a lint script
 ```
 
@@ -382,7 +394,7 @@ The honeypot fields (`is_honeypot_enabled`, `honeypot_channel_id`, `honeypot_act
 |---|---|
 | Web `PATCH /api/server/[guildId]` | `getUserGuildPermissions` → each field's scope from `FIELD_SCOPE_MAP` (`*` passes all). Fields absent from the map need no scope |
 | Web schedules, suggestions and YouTube **writes** (POST, PATCH, DELETE, `youtube/resolve`) | `checkGuildPermission(guildId, userId, scope)` with `schedules`, `suggestions` or `youtube` |
-| Web GET routes (settings, schedules, suggestions, YouTube, Discord data) | `checkGuildPermission(guildId, userId)` with **no scope**: any `guild_admins` row with at least one scope can read |
+| Web GET routes (settings, schedules, suggestions, YouTube, Discord data) | `checkGuildPermission(guildId, userId)` with **no scope**: any `guild_admins` row with at least one scope can read. Settings GET makes the same check as `grantsScope(getUserGuildPermissions(...))` and returns the grants as `viewerScopes` |
 | Web `GET /api/server/[guildId]/leaderboard` | Guild membership only (`isGuildMember`) |
 | Bot `/admin` | `managers` scope for managers-*, any scope for view-settings/reload |
 | Bot `/xp-admin` | `xp` scope (Administrator for reset-all/restore) |
@@ -430,7 +442,7 @@ BOT_WEBHOOK_SECRET=       # Optional, min 16; must equal the bot's. Webhook call
 3. `app/oauth/page.tsx` (guarded against a double run) calls `POST /api/auth`, which validates the 64-hex token, atomically marks it used (`UPDATE … WHERE used = false AND expires_at > now() RETURNING`), deletes expired rows, signs a JWT `{discord_id}` (HS256, 24h), and sets it as the `dragonbot_session` cookie (HttpOnly, SameSite=Lax, Secure in production)
 4. The UI calls `/api/*` with `credentials: "same-origin"`; it never stores the JWT. `Authorization: Bearer <jwt>` is accepted as a fallback
 5. `getAuthenticatedUser` verifies the JWT, then rejects it if issued before `users.jwt_invalid_before` or if the user row is missing
-6. Logout: `DELETE /api/auth` clears the cookie. A 401 on any page redirects to `/`
+6. Logout: `DELETE /api/auth` clears the cookie. A 401 on a page's load request redirects to `/` (`redirectIfUnauthorized`); mutations do not check for 401
 
 ### Middleware (`src/middleware.ts`, matcher `/api/:path*`)
 
@@ -449,7 +461,7 @@ All `[guildId]` path params are validated against `/^[0-9]{17,20}$/` before any 
 | `/api/auth` | DELETE | `getDiscordIdFromRequest` | — | Clears cookie |
 | `/api/guilds` | GET | yes | — | Custom-admin guilds, then up to 20 Discord checks; `isAdmin` false for plain members (leaderboard only) |
 | `/api/profile` | GET, PATCH | yes | own row | `profileUpdateSchema`; strips email, ban and JWT fields |
-| `/api/server/[guildId]` | GET | yes | any scope | Guild settings |
+| `/api/server/[guildId]` | GET | yes | any scope | Guild settings (`toSafeGuild`) plus `viewerScopes`: the caller's grants (`["*"]` for owner, Administrator, Manage Server or a `*` grant), last key |
 | `/api/server/[guildId]` | PATCH | yes | per-field `FIELD_SCOPE_MAP` | `guildSettingsUpdateSchema`, xpMin/xpMax cross-check, `findHoneypotChannelConflict`, `notifyBotReload` |
 | `/api/server/[guildId]/discord` | GET | yes | any scope | Channels and roles from Discord. Shortcut: a `guild_admins` row for this guild with at least one scope skips the Discord check |
 | `/api/server/[guildId]/leaderboard` | GET | yes | guild member | Top 100 from `user_xp`, no pagination |
@@ -467,9 +479,9 @@ All `[guildId]` path params are validated against `/^[0-9]{17,20}$/` before any 
 ### Web UI
 
 - Every page except `app/layout.tsx` and `app/page.tsx` is a client component that fetches `/api/*` in `useEffect`. **Discord-like dark theme** via Tailwind v4 colours (`dc-bg-primary`, `dc-accent`, … in `globals.css`).
-- **Sidebar** (`dashboard/layout.tsx`, responsive): servers from `GET /api/guilds`; admins see Settings, Schedules, YouTube, Suggestions and Leaderboard; members see Leaderboard only.
-- **Server settings:** Verification, Welcome, Audit Logging, Intro Gate, Moderation, Honeypot, Suggestions, AI, Off-Topic, XP, Birthdays. Channel/role dropdowns come from Discord; role and channel IDs are sent only when that data loaded. Sticky unsaved-changes bar. `PlaceholderTextarea` (settings page only): contenteditable with channel pills, `{member}/{server}` buttons and `#` autocomplete.
-- **Schedules:** create, edit, toggle, delete (confirmation modal); `CronBuilder`; plain textarea for the message. **YouTube:** module toggle (`isYoutubeEnabled` via `PATCH /api/server/[guildId]`), resolve-then-add, per-subscription toggle/edit/delete. **Suggestions:** filter, status, archive. **Profile:** Drexel-specific Year/Plan/College dropdowns and birthday. **Leaderboards:** `/dashboard/server/[guildId]/leaderboard` (members) and public `/leaderboard/[guildId]`.
+- **Sidebar** (`dashboard/layout.tsx`, responsive): `next/link` navigation, so `GET /api/guilds` and `GET /api/auth` run once per dashboard visit (each page handles its own 401); admins see Settings, Schedules, YouTube, Suggestions and Leaderboard; members see Leaderboard only.
+- **Server settings:** Verification, Welcome, Audit Logging, Intro Gate, Moderation, Honeypot, Suggestions, AI, Off-Topic, XP, Birthdays. Channel/role dropdowns come from Discord; role and channel IDs are sent only when that data loaded. Sticky unsaved-changes bar. `PlaceholderTextarea` (`components/settings/`, used only by the settings page): contenteditable with channel pills, `{member}/{server}` buttons and `#` autocomplete.
+- **Schedules:** create, edit, toggle, delete (confirmation modal); `CronBuilder`; plain textarea for the message. **YouTube:** module toggle (`isYoutubeEnabled` via `PATCH /api/server/[guildId]`), resolve-then-add, per-subscription toggle/edit/delete. **Suggestions:** filter, status, archive. Without the page's scope (`schedules`, `youtube`, `suggestions`; `*` always passes) the three pages hide their create, edit, toggle and delete controls (the YouTube module toggle is disabled) and show "You need the {scope} permission to make changes." **Profile:** Drexel-specific Year/Plan/College dropdowns and birthday. **Leaderboards:** `/dashboard/server/[guildId]/leaderboard` (members) and public `/leaderboard/[guildId]`.
 
 ### Lazy Initialization
 
@@ -644,6 +656,6 @@ When modifying this codebase, AI coding assistants must **never**:
 4. **Wire up** — Add to `BotContext` in `types/context.ts`, instantiate in `bootstrap/services.ts`
 5. **Command** — Create `apps/bot/src/commands/my-feature.ts` (auto-discovered on restart and registered globally), then add it by hand to `/help` (`commands/help.ts`) and the README command table
 6. **Events** — Create `apps/bot/src/events/my-event.ts` if needed (auto-discovered; add an intent in `client.ts` if the event needs one)
-7. **Web API** — Add routes to `apps/web/src/app/api/...`; new guild settings fields also need an entry in `FIELD_SCOPE_MAP` and `guildSettingsUpdateSchema`
+7. **Web API** — Add routes to `apps/web/src/app/api/...`; new guild settings fields also need an entry in `FIELD_SCOPE_MAP` and `guildSettingsUpdateSchema`, and for the settings page in `GuildSettings` (`lib/guild-settings.ts`) and `buildSettingsPatch` (`lib/settings-patch.ts`)
 8. **Web UI** — Add pages to `apps/web/src/app/dashboard/...`
 9. **Verify** — Run `pnpm typecheck` and `pnpm test`
