@@ -90,6 +90,7 @@ interface BotContext {
     birthday: BirthdayService;
     youtube: YouTubeService;
     honeypot: HoneypotService;
+    repeatSpam: RepeatSpamService;
   };
   xpArchiveRepo?: XpArchiveRepository; // present after startup
   scheduler?: SchedulerManager;        // present after startup, absent during early init
@@ -176,7 +177,7 @@ Note: Birthday data (`birth_month`, `birth_day`, `birth_year`) is stored on the 
 |---|---|
 | Verification | `verification_role_id`, `is_verification_sync_enabled` |
 | Ban Sync | `is_ban_sync_enabled` |
-| Honeypot | `is_honeypot_enabled`, `honeypot_channel_id`, `honeypot_action` (`kick` or `ban`), `honeypot_warning_channel_id`, `honeypot_warning_message_id` (the last two are written only by the bot) |
+| Honeypot | `is_honeypot_enabled`, `honeypot_channel_id`, `honeypot_action` (`kick` or `ban`), `honeypot_warning_channel_id`, `honeypot_warning_message_id` (the last two are written only by the bot), `is_repeat_spam_enabled`, `repeat_spam_channel_count` (2–10, default 3), `repeat_spam_match_mode` (`exact`, `ignore_case` or `similar`) |
 | Welcome | `welcome_channel_id`, `welcome_message`, `is_welcome_enabled`, `dm_welcome_message`, `is_dm_welcome_enabled` |
 | Logging | `log_channel_id`, `is_logging_enabled`, `log_events` (array of event types) |
 | Intro Gate | `intro_channel_id`, `intro_role_id`, `is_intro_gate_enabled`, `intro_min_chars`, `intro_min_words` |
@@ -198,7 +199,7 @@ The `guild_admins` table provides granular permissions for users who aren't the 
 
 The server owner and members with Administrator or Manage Server always get full access. The `guild_admins` table is additive.
 
-The honeypot fields (`is_honeypot_enabled`, `honeypot_channel_id`, `honeypot_action`) need full access: the server owner, Administrator, Manage Server or a `guild_admins` row holding `*`. They decide who gets kicked or banned, so the `moderation` scope isn't enough.
+The honeypot fields (`is_honeypot_enabled`, `honeypot_channel_id`, `honeypot_action`, `is_repeat_spam_enabled`, `repeat_spam_channel_count`, `repeat_spam_match_mode`) need full access: the server owner, Administrator, Manage Server or a `guild_admins` row holding `*`. They decide who gets kicked or banned, so the `moderation` scope isn't enough.
 
 ## Environment Variables
 
@@ -290,7 +291,7 @@ MEE6-style XP with in-memory caching to minimize DB writes (Neon charges for com
 
 ### Honeypot
 
-A per-server trap channel for spam waves: DragonBot keeps a pinned warning in it and removes ordinary accounts that post there. The Honeypot card sets the three settings in the config table (full access only: Manage Server or `*`; the action defaults to `kick`). Only the bot writes `honeypot_warning_channel_id` and `honeypot_warning_message_id`; the `PATCH` never accepts them. A *notice* is a message in the log channel.
+The Honeypot feature has two parts, each with its own switch: the channel trap and the repeated-message check. The channel trap is a per-server trap channel for spam waves: DragonBot keeps a pinned warning in it and removes ordinary accounts that post there. The Honeypot card sets the three settings in the config table (full access only: Manage Server or `*`; the action defaults to `kick`). Only the bot writes `honeypot_warning_channel_id` and `honeypot_warning_message_id`; the `PATCH` never accepts them. A *notice* is a message in the log channel.
 
 - **Who triggers what:** `messageCreate` checks the honeypot channel before the intro gate and XP, so a honeypot post earns no XP. System, webhook and bot messages, threads and the System Messages channel are ignored. **Staff** (Administrator, Manage Server, Kick Members or Ban Members, nothing else) are ignored completely. A **verified** member (has `verification_role_id`; none set means nobody is) only has the message deleted and logged. Everyone else is kicked or banned, with the message and their last hour deleted. A failed member lookup removes nobody (it might be staff); an author who left is still removed by ID.
 - **No warning, no enforcement:** a post is acted on only if the honeypot is enabled with a channel, the stored warning channel equals it, a warning ID is stored and the post is newer than the warning (pinned isn't required). Before it deletes a honeypot post or removes anyone, it re-reads the row from the database, since the cache can be stale (the late-message deletions and the sweep only follow a removal that passed). The bot refuses to arm in the System Messages channel, in a channel another setting uses (`findHoneypotChannelConflict`), or when the channel's resolved ID differs from the stored string: the sync removes any stored warning, clears the IDs and sends a notice.
@@ -299,8 +300,17 @@ A per-server trap channel for spam waves: DragonBot keeps a pinned warning in it
 - **Warning syncs** run after a dashboard save (one server, or all on a full reload), on startup, every 4 hours, on `/admin reload` (that server only), when DragonBot joins a server and when the warning is deleted. A sync reads the row from the database and adopts a warning already pinned rather than posting a duplicate. Unknown Message and Unknown Channel mean gone (IDs replaced or cleared); other failures, such as Missing Access, mean "can't tell" (IDs kept, a notice).
 - **One case per account, cleanup and shutdown:** in-flight actions are keyed by server and user (`HoneypotService.beginCase`). A further post from the same account while its case runs (or sent before it ended) is deleted but starts no second action or log entry; a case past `IN_FLIGHT_TIMEOUT_MS` counts as over. Discord's ban cleanup can miss the newest message, so a confirmed ban is followed by a sweep of the account's cached messages (`SWEEP_DELAY_MS`) and, for `LATE_MESSAGE_WINDOW_MS`, deletion of its new ones. `HoneypotService.drain` waits up to 5 seconds before `client.destroy()`; a kick-mode post arriving after shutdown begins is only deleted and logged.
 - **Ban sync and the other handlers:** DragonBot records each action in memory before calling Discord (`RECORD_TTL_MS` from when the ban resolves), and `guildBanAdd` and `guildMemberRemove` read it first, before any `await`. Ban sync skips honeypot actions, and any ban whose reason contains `[Honeypot`. A honeypot ban logs "Member Banned" only; a kick logs "Member Kicked" and skips `markBanned` and "Member Banned". With the record gone, `guildBanAdd` still recognises a kick by its `[Honeypot kick]` reason and skips `markBanned`, "Member Banned" and ban sync; that kick's member-remove event then logs "Member Left".
-- **Logging and notices:** notices go out whenever logging is enabled with a log channel, and warning-sync notices repeat at most once per server per distinct text every 24 hours. The generic `messageDelete` handler skips messages DragonBot deleted itself, its own warning and messages from an account with a recent honeypot action.
-- **Dashboard:** the `PATCH` route rejects a channel another setting uses (`findHoneypotChannelConflict`). The card turns the honeypot on only for a text channel in the loaded list. A save sends each honeypot field only when it differs from the last saved settings (all three when it turns the honeypot on), so a tab left open can't turn the honeypot back on, or put back an old action or channel, on an unrelated save.
+- **Repeated-message check:** kicks an ordinary account that posts the same message in several different channels within a short time (a second part of the Honeypot, with its own switch).
+  - **What counts:** real posts only. The matching level is `exact` (identical text), `ignore_case` (the default) or `similar` (lowercased, links and punctuation removed, word sets at least 0.8 alike). A message needs at least 20 letters and digits and at least 3 distinct words, so "gm", lone emoji, link-only posts and one repeated word never count.
+  - **Window:** 60 seconds from the first tracked copy. Copies count per distinct channel, and a thread is its own channel; the threshold is `repeat_spam_channel_count`.
+  - **Action:** always a kick, through the channel trap's removal path (ban with a 1-hour cleanup, then unban), with reason `[Honeypot kick] same message in N channels`.
+  - **Left alone completely:** verified members, staff, and authors whose lookup fails (nothing is deleted, kicked or logged). An author who left is still removed by ID.
+  - **Shared case:** one case per account, shared with the trap through `HoneypotService.beginCase`; the first to claim an account decides the action.
+  - **Copies:** copies posted while the case is open are deleted on arrival, and DragonBot deletes the copies itself when the kick fails.
+  - **State:** tracking is in memory only (`RepeatSpamService`), so a restart forgets it.
+  - **Logging:** its embed goes out whenever logging is on.
+- **Logging and notices:** notices name the check that caught the account (the channel trap or the repeated-message check). They go out whenever logging is enabled with a log channel, and warning-sync notices repeat at most once per server per distinct text every 24 hours. The generic `messageDelete` handler skips messages DragonBot deleted itself, its own warning and messages from an account with a recent honeypot action.
+- **Dashboard:** the `PATCH` route rejects a channel another setting uses (`findHoneypotChannelConflict`). The card turns the honeypot on only for a text channel in the loaded list. A save sends each honeypot field, including the three repeated-message fields, only when it differs from the last saved settings (all three when it turns the honeypot on), so a tab left open can't turn the honeypot back on, or put back an old action or channel, on an unrelated save.
 - **Permissions and deploy:** `docs/superpowers/specs/2026-10-29-honeypot-design.md` lists the bot permissions (Pin Messages is separate from Manage Messages since 2026-02-23). New `guilds` columns must be pushed before the code that reads them ships, because `select().from(guilds)` names every column.
 
 ### YouTube Notifications
