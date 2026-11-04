@@ -808,6 +808,11 @@ export default function ServerSettingsPage() {
             <option value="kick">Kick: removed, can rejoin</option>
           </select>
         </div>
+        <div className="space-y-1 text-xs text-dc-text-muted">
+          <p>Their messages from the last hour are cleaned up across the whole server either way.</p>
+          <p>Verified members only have the message deleted. Staff (Administrator, Manage Server, Kick Members or Ban Members) are ignored.</p>
+          <p>Pick a channel everyone can see and post in but nobody has a reason to use. Test it with an alt account: if you aren&apos;t staff, posting there removes you.</p>
+        </div>
         <div className="border-t border-dc-border pt-3 mt-1 space-y-3">
           <p className="text-xs font-semibold text-dc-text-secondary uppercase tracking-wide">Repeated messages</p>
           <Toggle label="Enable repeated-message check" checked={settings.isRepeatSpamEnabled} onChange={(v) => update("isRepeatSpamEnabled", v)} />
@@ -818,7 +823,12 @@ export default function ServerSettingsPage() {
               type="number"
               className="w-full px-3 py-2 bg-dc-input border border-dc-border rounded-md text-dc-text-primary text-sm outline-none focus:border-dc-accent transition-colors"
               value={repeatCountText ?? String(settings.repeatSpamChannelCount)}
-              onChange={(e) => setRepeatCountText(e.target.value)}
+              onChange={(e) => {
+                setRepeatCountText(e.target.value);
+                // A valid in-range number counts at once, so Save enables while typing and a click on it can't beat the blur
+                const n = Number(e.target.value);
+                if (e.target.value.trim() !== "" && Number.isInteger(n) && n >= 2 && n <= 10) update("repeatSpamChannelCount", n);
+              }}
               onBlur={(e) => {
                 const n = parseInt(e.target.value, 10);
                 if (!Number.isNaN(n)) update("repeatSpamChannelCount", Math.min(10, Math.max(2, n)));
@@ -844,10 +854,7 @@ export default function ServerSettingsPage() {
         </div>
         <div className="border-t border-dc-border pt-3 mt-1 space-y-1 text-xs text-dc-text-muted">
           <p>Changing these settings needs Manage Server or full dashboard access.</p>
-          <p>Their messages from the last hour are cleaned up across the whole server either way.</p>
-          <p>Verified members only have the message deleted. Staff (Administrator, Manage Server, Kick Members or Ban Members) are ignored.</p>
           <p>Honeypot bans are never copied to other servers by ban sync.</p>
-          <p>Pick a channel everyone can see and post in but nobody has a reason to use. Test it with an alt account: if you aren't staff, posting there removes you.</p>
         </div>
       </Section>
 
