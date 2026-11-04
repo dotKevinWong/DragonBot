@@ -16,6 +16,8 @@ Kevin approved everything. The work landed in five commits on `claude/codebase-a
 
 Each refactor began with characterization tests that passed on the old code. Each step had two reviewers, one of whom diffed every changed path against the previous commit. Bot tests went from 241 to 612, and web tests from none to 1196. `tsc` passes in all three packages, and `next build` succeeds.
 
+**Merged with main (4 November 2026, PR #5):** main gained the honeypot repeated-message check (PR #4) after this branch was cut. Merge commit `1606c31` moved that feature into the refactored modules, as listed in its commit message. Three reviewers then checked the result: one against main, one against the pre-merge branch, and one on how the two fit together. Sceptics verified every finding. No behaviour problem was found. The follow-up commit fixes seven low-severity items: `AGENTS.md` gaps, and the settings page now reads the channel-count limits from `@dragonbot/db/honeypot` instead of hard-coding 2 and 10. After the merge, bot tests number 665 and web tests 1200. All pass, and `tsc` and `next build` succeed.
+
 **Accepted, intended behaviour changes beyond B1 to B7:**
 - **Sidebar (P2):** the guild list and user info load once per dashboard visit, not on every click.
 - **Dashboard permissions (B1 follow-up):**
@@ -33,7 +35,7 @@ Each refactor began with characterization tests that passed on the old code. Eac
 
 **Not done, waiting on Kevin:**
 - **Database (P14, X7):**
-  - Run `pnpm --filter @dragonbot/db db:push` (or `db:generate`) to create the 4 new indexes.
+  - Run `pnpm --filter @dragonbot/db db:push` (or `db:generate`) to create the 4 new indexes. The same push also adds main's three repeated-message columns if they are not in the database yet.
   - Dropping the redundant `auth_tokens_token_idx` and `suggestions_guild_idx`, and the unused `sync_flags` table, would change production data, so they were left in place.
 - **Unchanged by choice:**
   - P5: XP still persists every 4 hours.

@@ -16,6 +16,7 @@ import { FIELD_LABEL_CLASS, TEXT_INPUT_CLASS, SELECT_CLASS } from "@/lib/form-cl
 import { redirectIfUnauthorized } from "@/lib/client-fetch";
 import { filterTextChannels } from "@/lib/feature-list";
 import { TIMEZONES } from "@/lib/timezones";
+import { REPEAT_SPAM_MIN_CHANNELS, REPEAT_SPAM_MAX_CHANNELS } from "@dragonbot/db/honeypot";
 
 // --- Main Page ---
 
@@ -262,7 +263,6 @@ export default function ServerSettingsPage() {
           <Toggle label="Enable repeated-message check" checked={settings.isRepeatSpamEnabled} onChange={(v) => update("isRepeatSpamEnabled", v)} />
           <div>
             <label className={FIELD_LABEL_CLASS}>Kick after the same message in this many channels</label>
-            {/* The 2 and 10 are REPEAT_SPAM_MIN_CHANNELS and REPEAT_SPAM_MAX_CHANNELS; this client component can't import @dragonbot/db */}
             <input
               type="number"
               className={TEXT_INPUT_CLASS}
@@ -271,15 +271,15 @@ export default function ServerSettingsPage() {
                 setRepeatCountText(e.target.value);
                 // A valid in-range number counts at once, so Save enables while typing and a click on it can't beat the blur
                 const n = Number(e.target.value);
-                if (e.target.value.trim() !== "" && Number.isInteger(n) && n >= 2 && n <= 10) update("repeatSpamChannelCount", n);
+                if (e.target.value.trim() !== "" && Number.isInteger(n) && n >= REPEAT_SPAM_MIN_CHANNELS && n <= REPEAT_SPAM_MAX_CHANNELS) update("repeatSpamChannelCount", n);
               }}
               onBlur={(e) => {
                 const n = parseInt(e.target.value, 10);
-                if (!Number.isNaN(n)) update("repeatSpamChannelCount", Math.min(10, Math.max(2, n)));
+                if (!Number.isNaN(n)) update("repeatSpamChannelCount", Math.min(REPEAT_SPAM_MAX_CHANNELS, Math.max(REPEAT_SPAM_MIN_CHANNELS, n)));
                 setRepeatCountText(null);
               }}
-              min={2}
-              max={10}
+              min={REPEAT_SPAM_MIN_CHANNELS}
+              max={REPEAT_SPAM_MAX_CHANNELS}
             />
           </div>
           <div>
