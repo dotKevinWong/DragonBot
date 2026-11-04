@@ -16,6 +16,7 @@ import {
   isHoneypotReason,
   isRealPost,
   removalReason,
+  repeatRemovalReason,
   warningText,
   type ActionRecord,
 } from "../../src/services/honeypot.service.js";
@@ -47,6 +48,11 @@ describe("honeypot rules", () => {
     expect(isHoneypotKickReason(removalReason("ban", "trap", "111"))).toBe(false);
     expect(isHoneypotKickReason(null)).toBe(false);
     expect(isHoneypotKickReason("spam, like the [Honeypot kick] one")).toBe(false);
+  });
+
+  it("writes a repeated-message kick reason that ban sync recognises", () => {
+    expect(repeatRemovalReason(3)).toBe("[Honeypot kick] same message in 3 channels");
+    expect(isHoneypotKickReason(repeatRemovalReason(3))).toBe(true);
   });
 
   it("ignores system, webhook and bot messages", () => {
