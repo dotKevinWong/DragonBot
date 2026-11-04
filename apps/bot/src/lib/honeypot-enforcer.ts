@@ -1,75 +1,26 @@
-import {
-  DiscordAPIError,
-  PermissionFlagsBits,
-  RESTJSONErrorCodes,
-  type Guild,
-  type GuildMember,
-  type Message,
-} from "discord.js";
-import type { Logger } from "pino";
+import { RESTJSONErrorCodes, type Message } from "discord.js";
 import { HONEYPOT_ACTIONS, findHoneypotChannelConflict, type GuildRow, type HoneypotAction } from "@dragonbot/db";
-import {
-  CLEANUP_SECONDS,
-  SWEEP_DELAY_MS,
-  UNBAN_REASON,
-  decideHoneypot,
-  isRealPost,
-  removalReason,
-  type HoneypotDecision,
-  type MemberStatus,
-} from "../services/honeypot.service.js";
+import { decideHoneypot, isRealPost, removalReason, type HoneypotDecision } from "../services/honeypot.service.js";
 import type { BotContext } from "../types/context.js";
 import { buildMessageDeletedEmbed } from "../utils/message-log.js";
-
-/** A member with any of these is staff, and the honeypot leaves them alone. Nothing else counts. */
-const STAFF_PERMISSIONS = [
-  PermissionFlagsBits.Administrator,
-  PermissionFlagsBits.ManageGuild,
-  PermissionFlagsBits.KickMembers,
-  PermissionFlagsBits.BanMembers,
-];
-
-/** Discord's bulk delete takes at most this many messages. */
-const BULK_DELETE_LIMIT = 100;
-
-/** A failure reason is cut to this length before it goes into a log entry or a notice. */
-const MAX_REASON_LENGTH = 200;
+import {
+  cutReason,
+  describeError,
+  hasErrorCode,
+  isVerified,
+  lookUpAuthor,
+  memberStatus,
+  messageFate,
+  needsAttention,
+  outcomeText,
+  removeAccount,
+  sendHoneypotNotice,
+  trapLead,
+  type Outcome,
+} from "./honeypot-removal.js";
 
 /** Why a honeypot message is deleted without removing anyone: the decision, or a kick held back at shutdown. */
 type DeleteOnlyWhy = Extract<HoneypotDecision, { type: "delete_only" }>["why"] | "shutting_down";
-
-/** The author of a honeypot message, as far as Discord could tell. */
-type Author = { kind: "member"; member: GuildMember } | { kind: "left" } | { kind: "lookup_failed"; err: unknown };
-
-type BanCheck = { kind: "banned" } | { kind: "not_banned" } | { kind: "unknown"; reason: string };
-
-type BanResult = { kind: "confirmed" } | { kind: "uncertain"; reason: string } | { kind: "failed"; reason: string };
-
-/** How a removal case ended. Every outcome but "removed" and "already_banned" also goes out as a notice. */
-type Outcome =
-  | { kind: "removed"; action: HoneypotAction; memberLeft: boolean }
-  | { kind: "already_banned" }
-  | { kind: "failed"; reason: string }
-  | { kind: "unconfirmed"; reason: string }
-  | { kind: "still_banned"; reason: string };
-
-/** A moderator has to act on these outcomes, so they go out as notices, and pino logs them at warn. */
-function needsAttention(outcome: Outcome): boolean {
-  return outcome.kind === "failed" || outcome.kind === "unconfirmed" || outcome.kind === "still_banned";
-}
-
-function hasErrorCode(err: unknown, code: number): boolean {
-  return err instanceof DiscordAPIError && err.code === code;
-}
-
-/** Why a Discord call failed. */
-function describeError(err: unknown): string {
-  return err instanceof Error && err.message ? err.message : String(err);
-}
-
-function cutReason(reason: string): string {
-  return reason.slice(0, MAX_REASON_LENGTH);
-}
 
 /**
  * The honeypot is on in the message's channel, its warning is posted there, and the message was posted after the
@@ -90,31 +41,6 @@ const ALL_DIGITS = /^\d+$/;
 /** Whether snowflake `id` was made after snowflake `than`. False when either isn't all digits, so nothing is enforced. */
 function isNewerSnowflake(id: string, than: string): boolean {
   return ALL_DIGITS.test(id) && ALL_DIGITS.test(than) && BigInt(id) > BigInt(than);
-}
-
-function isVerified(member: GuildMember, verificationRoleId: string | null): boolean {
-  return !!verificationRoleId && member.roles.cache.has(verificationRoleId);
-}
-
-/** The member from the gateway payload, fetched only when it's missing. */
-async function lookUpAuthor(message: Message<true>): Promise<Author> {
-  if (message.member) return { kind: "member", member: message.member };
-  try {
-    return { kind: "member", member: await message.guild.members.fetch(message.author.id) };
-  } catch (err) {
-    if (hasErrorCode(err, RESTJSONErrorCodes.UnknownMember)) return { kind: "left" };
-    return { kind: "lookup_failed", err };
-  }
-}
-
-function memberStatus(author: Author, verificationRoleId: string | null): MemberStatus {
-  if (author.kind === "left") return { kind: "left" };
-  if (author.kind === "lookup_failed") return { kind: "lookup_failed" };
-  return {
-    kind: "member",
-    isStaff: author.member.permissions.any(STAFF_PERMISSIONS),
-    isVerified: isVerified(author.member, verificationRoleId),
-  };
 }
 
 /**
@@ -218,35 +144,6 @@ export async function deleteLateMessage(message: Message<true>, ctx: BotContext)
 }
 
 /**
- * Deletes the account's messages since sinceMs that are still in DragonBot's message cache, in every text channel and
- * thread of the server, and returns how many it deleted. Discord's ban cleanup sometimes misses the newest message.
- * Never throws: a failed delete is logged and the sweep carries on.
- */
-export async function sweepCachedMessages(guild: Guild, userId: string, sinceMs: number, logger: Logger): Promise<number> {
-  let deleted = 0;
-  for (const channel of guild.channels.cache.values()) {
-    if (!channel.isTextBased() || !("messages" in channel)) continue;
-    // A partial message in the cache has no author.
-    const leftovers = [
-      ...channel.messages.cache
-        .filter((cached) => cached.author?.id === userId && cached.createdTimestamp >= sinceMs)
-        .values(),
-    ];
-    for (let start = 0; start < leftovers.length; start += BULK_DELETE_LIMIT) {
-      const chunk = leftovers.slice(start, start + BULK_DELETE_LIMIT);
-      try {
-        if (chunk.length === 1) await chunk[0].delete();
-        else await channel.bulkDelete(chunk.map((cached) => cached.id), true);
-        deleted += chunk.length;
-      } catch (err) {
-        logger.warn({ err, guildId: guild.id, channelId: channel.id, userId }, "Couldn't delete honeypot leftovers");
-      }
-    }
-  }
-  return deleted;
-}
-
-/**
  * Deletes and logs the message without removing anyone. A failed member lookup and a kick held back at shutdown also
  * get a notice. When the delete fails, the texts say so, and a last notice asks a moderator to delete the message by
  * hand.
@@ -266,14 +163,17 @@ async function deleteOnly(
   const deleted = deleteFailure === null;
   const text = deleteOnlyText(why, deleted);
   await sendLogEntry(message, text, deleted, ctx);
+  const lead = trapLead(message.author.id, message.channelId);
   if (why === "lookup_failed") {
     const reason = cutReason(describeError(lookupError));
     const notice = `${messageFate(deleted)} Couldn't check membership (${reason}), so nobody was removed.`;
-    await sendHoneypotNotice(message, notice, ctx);
+    await sendHoneypotNotice(message.guildId, message.client, lead, notice, ctx);
   }
   // The same text as the entry: the account is still in the server.
-  if (why === "shutting_down") await sendHoneypotNotice(message, text, ctx);
-  if (deleteFailure !== null) await sendHoneypotNotice(message, deleteFailedText(deleteFailure), ctx);
+  if (why === "shutting_down") await sendHoneypotNotice(message.guildId, message.client, lead, text, ctx);
+  if (deleteFailure !== null) {
+    await sendHoneypotNotice(message.guildId, message.client, lead, deleteFailedText(deleteFailure), ctx);
+  }
 }
 
 /**
@@ -291,7 +191,9 @@ async function runRemovalCase(
   let deleteFailure: string | null;
   try {
     deleteFailure = await deleteHoneypotMessage(message, ctx);
-    outcome = await removeAuthor(message, action, memberLeft, caseId, ctx);
+    const reason = removalReason(action, message.channel.name, message.id);
+    const removal = { action, reason, channelId: message.channelId, memberLeft, caseId };
+    outcome = await removeAccount(message.guild, message.author.id, removal, ctx);
   } finally {
     // As soon as the removal ends, so a slow log send can't hold the case open: a kicked account that rejoins and
     // posts in the honeypot meanwhile is a new case.
@@ -303,122 +205,15 @@ async function runRemovalCase(
   else ctx.logger.info(fields, "Honeypot case handled");
 
   const deleted = deleteFailure === null;
-  const text = outcomeText(outcome, deleted);
+  const text = outcomeText(outcome, messageFate(deleted));
   await sendLogEntry(message, text, deleted, ctx);
-  if (needsAttention(outcome)) await sendHoneypotNotice(message, text, ctx);
+  const lead = trapLead(message.author.id, message.channelId);
+  if (needsAttention(outcome)) await sendHoneypotNotice(message.guildId, message.client, lead, text, ctx);
   // Sent even after a ban, whose cleanup usually takes the message: Discord's cleanup can miss the newest message, and
   // the leftover sweep fails the same way when DragonBot can't delete there.
-  if (deleteFailure !== null) await sendHoneypotNotice(message, deleteFailedText(deleteFailure), ctx);
-}
-
-/**
- * Bans the author, which cleans up their last hour of messages. In kick mode the ban is lifted straight away.
- * Every path after a successful recordAction confirms or drops the record.
- */
-async function removeAuthor(
-  message: Message<true>,
-  action: HoneypotAction,
-  memberLeft: boolean,
-  caseId: number,
-  ctx: BotContext,
-): Promise<Outcome> {
-  const { guild } = message;
-  const userId = message.author.id;
-
-  if (action === "kick") {
-    // Banned already, for example by a moderator or ban sync moments before: the unban would lift their ban.
-    const existing = await checkBan(guild, userId);
-    if (existing.kind === "banned") return { kind: "already_banned" };
-    if (existing.kind === "unknown") {
-      return { kind: "failed", reason: `couldn't check whether they were already banned (${existing.reason})` };
-    }
+  if (deleteFailure !== null) {
+    await sendHoneypotNotice(message.guildId, message.client, lead, deleteFailedText(deleteFailure), ctx);
   }
-
-  const reason = removalReason(action, message.channel.name, message.id);
-  const recorded = ctx.services.honeypot.recordAction(
-    guild.id,
-    userId,
-    caseId,
-    { action, reason, channelId: message.channelId },
-    { memberLeft },
-  );
-  // The case timed out while the delete or the ban check waited.
-  if (!recorded) return { kind: "failed", reason: "the case timed out" };
-
-  const ban = await banAuthor(guild, userId, reason, caseId, ctx);
-  if (ban.kind === "failed") return { kind: "failed", reason: ban.reason };
-  // Straight after the ban, so a slow unban can't push the sweep past the action record, where its deletes would reach
-  // the ordinary delete log. Not after an uncertain ban: the account may still be a member.
-  if (ban.kind === "confirmed") scheduleSweep(guild, userId, ctx.logger);
-  const unbanFailure = action === "kick" ? await liftKickBan(guild, userId) : null;
-
-  if (unbanFailure !== null) return { kind: "still_banned", reason: unbanFailure };
-  if (ban.kind === "uncertain") return { kind: "unconfirmed", reason: ban.reason };
-  return { kind: "removed", action, memberLeft };
-}
-
-/** Bans the author and confirms or drops the case's action record to match what happened. */
-async function banAuthor(guild: Guild, userId: string, reason: string, caseId: number, ctx: BotContext): Promise<BanResult> {
-  const honeypot = ctx.services.honeypot;
-  try {
-    await guild.members.ban(userId, { deleteMessageSeconds: CLEANUP_SECONDS, reason });
-  } catch (err) {
-    // Discord refused it: role order, a missing permission, a 2FA requirement or the non-member ban cap.
-    if (err instanceof DiscordAPIError && err.status >= 400 && err.status < 500) {
-      honeypot.dropAction(guild.id, userId, caseId);
-      return { kind: "failed", reason: describeError(err) };
-    }
-    // A timeout or a server error: the ban may still have happened.
-    const after = await checkBan(guild, userId);
-    if (after.kind === "not_banned") {
-      honeypot.dropAction(guild.id, userId, caseId);
-      return { kind: "failed", reason: describeError(err) };
-    }
-    if (after.kind === "unknown") {
-      // Nobody can tell. A short record still keeps a late ban event out of ban sync, and no late window opens.
-      honeypot.confirmAction(guild.id, userId, caseId, { uncertain: true });
-      return { kind: "uncertain", reason: describeError(err) };
-    }
-    // The ban is there: carry on as if the call had resolved.
-  }
-  honeypot.confirmAction(guild.id, userId, caseId);
-  return { kind: "confirmed" };
-}
-
-/** Whether the user is banned, read from Discord rather than the cache. Unknown Ban means not banned. */
-async function checkBan(guild: Guild, userId: string): Promise<BanCheck> {
-  try {
-    await guild.bans.fetch({ user: userId, force: true, cache: false });
-    return { kind: "banned" };
-  } catch (err) {
-    if (hasErrorCode(err, RESTJSONErrorCodes.UnknownBan)) return { kind: "not_banned" };
-    return { kind: "unknown", reason: describeError(err) };
-  }
-}
-
-/** Lifts a kick's ban, trying twice. Unknown Ban means there's nothing to lift. Returns why it failed, or null. */
-async function liftKickBan(guild: Guild, userId: string): Promise<string | null> {
-  let failure = "";
-  for (let attempt = 1; attempt <= 2; attempt++) {
-    try {
-      await guild.bans.remove(userId, UNBAN_REASON);
-      return null;
-    } catch (err) {
-      if (hasErrorCode(err, RESTJSONErrorCodes.UnknownBan)) return null;
-      failure = describeError(err);
-    }
-  }
-  return failure;
-}
-
-/** Sweeps the account's leftovers from DragonBot's message cache about 15 seconds after the removal. */
-function scheduleSweep(guild: Guild, userId: string, logger: Logger): void {
-  const sinceMs = Date.now() - CLEANUP_SECONDS * 1000;
-  setTimeout(() => {
-    sweepCachedMessages(guild, userId, sinceMs, logger).catch((err: unknown) => {
-      logger.warn({ err, guildId: guild.id, userId }, "Honeypot leftover sweep failed");
-    });
-  }, SWEEP_DELAY_MS).unref();
 }
 
 /**
@@ -438,29 +233,6 @@ async function deleteHoneypotMessage(message: Message<true>, ctx: BotContext): P
   return null;
 }
 
-/**
- * The Honeypot Action field of a removal case's log entry, which notices repeat. It never claims a delete that failed.
- * The removed, unconfirmed and still-banned texts say nothing about the message: a ban's cleanup usually takes it.
- */
-function outcomeText(outcome: Outcome, deleted: boolean): string {
-  switch (outcome.kind) {
-    case "removed": {
-      const done = outcome.action === "ban" ? "Banned." : "Kicked.";
-      return outcome.memberLeft
-        ? `${done} They had already left; only what DragonBot saw was cleaned up.`
-        : `${done} Their messages from the last hour were cleaned up.`;
-    }
-    case "already_banned":
-      return `Already banned. ${messageFate(deleted)}`;
-    case "failed":
-      return `Removal failed: ${cutReason(outcome.reason)}. ${messageFate(deleted)}`;
-    case "unconfirmed":
-      return `Removal unconfirmed: ${cutReason(outcome.reason)}. Check the ban list.`;
-    case "still_banned":
-      return `Kicked, but the unban failed: ${cutReason(outcome.reason)}. They are still banned and need a manual unban.`;
-  }
-}
-
 /** The Honeypot Action field for a message deleted without removing anyone. It never claims a delete that failed. */
 function deleteOnlyText(why: DeleteOnlyWhy, deleted: boolean): string {
   switch (why) {
@@ -473,11 +245,6 @@ function deleteOnlyText(why: DeleteOnlyWhy, deleted: boolean): string {
     case "shutting_down":
       return `${messageFate(deleted)} DragonBot was shutting down, so nobody was removed.`;
   }
-}
-
-/** What became of the honeypot message, in the texts that mention it. */
-function messageFate(deleted: boolean): string {
-  return deleted ? "Message deleted only." : "Couldn't delete the message.";
 }
 
 /** The notice for a honeypot message DragonBot couldn't delete. */
@@ -504,16 +271,5 @@ async function sendLogEntry(
     await ctx.services.logging.sendLogEmbed(message.guildId, embed, message.client, ctx.logger);
   } catch (err) {
     ctx.logger.warn({ err, guildId: message.guildId }, "Couldn't send the honeypot log entry");
-  }
-}
-
-/** A notice in the log channel, whatever the server's log event settings. Never throws. */
-async function sendHoneypotNotice(message: Message<true>, text: string, ctx: BotContext): Promise<void> {
-  const userId = message.author.id;
-  const description = `<@${userId}> (${userId}) posted in the honeypot <#${message.channelId}>. ${text}`;
-  try {
-    await ctx.services.logging.sendNotice(message.guildId, description, message.client, ctx.logger);
-  } catch (err) {
-    ctx.logger.warn({ err, guildId: message.guildId }, "Couldn't send a honeypot notice");
   }
 }

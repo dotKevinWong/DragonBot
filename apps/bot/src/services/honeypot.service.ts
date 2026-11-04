@@ -66,6 +66,11 @@ export function removalReason(action: HoneypotAction, channelName: string, messa
   return `${tag} posted in #${channelName} (msg ${messageId})`;
 }
 
+/** The ban reason for the repeated-message check, which always kicks. channelCount is the copies' distinct channels. */
+export function repeatRemovalReason(channelCount: number): string {
+  return `${HONEYPOT_KICK_TAG} same message in ${channelCount} channels`;
+}
+
 export function isHoneypotReason(reason: string | null | undefined): boolean {
   return reason?.includes(HONEYPOT_REASON_MARKER) ?? false;
 }

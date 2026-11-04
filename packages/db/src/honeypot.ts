@@ -28,3 +28,29 @@ export function findHoneypotChannelConflict(
   }
   return null;
 }
+
+/** How closely copies must match for the repeated-message check: word for word (case-sensitive), word for word ignoring case, or too similar. */
+export const REPEAT_SPAM_MATCH_MODES = ["exact", "ignore_case", "similar"] as const;
+
+export type RepeatSpamMatchMode = (typeof REPEAT_SPAM_MATCH_MODES)[number];
+
+/** Range and default for how many different channels the same message must reach before the account is kicked. */
+export const REPEAT_SPAM_MIN_CHANNELS = 2;
+export const REPEAT_SPAM_MAX_CHANNELS = 10;
+export const REPEAT_SPAM_DEFAULT_CHANNELS = 3;
+
+/** True when the repeated-message check is on, with a known matching level and a whole channel count in range. */
+export function isRepeatSpamArmed(settings: {
+  isRepeatSpamEnabled: boolean;
+  repeatSpamChannelCount: number;
+  repeatSpamMatchMode: string;
+}): boolean {
+  const { isRepeatSpamEnabled, repeatSpamChannelCount, repeatSpamMatchMode } = settings;
+  return (
+    isRepeatSpamEnabled &&
+    (REPEAT_SPAM_MATCH_MODES as readonly string[]).includes(repeatSpamMatchMode) &&
+    Number.isInteger(repeatSpamChannelCount) &&
+    repeatSpamChannelCount >= REPEAT_SPAM_MIN_CHANNELS &&
+    repeatSpamChannelCount <= REPEAT_SPAM_MAX_CHANNELS
+  );
+}

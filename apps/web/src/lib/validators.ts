@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { HONEYPOT_ACTIONS } from "@dragonbot/db";
+import { HONEYPOT_ACTIONS, REPEAT_SPAM_MATCH_MODES, REPEAT_SPAM_MIN_CHANNELS, REPEAT_SPAM_MAX_CHANNELS } from "@dragonbot/db";
 
 const VALID_LOG_EVENTS = [
   "member_join", "member_leave", "message_delete", "message_edit",
@@ -138,6 +138,9 @@ export const guildSettingsUpdateSchema = z.object({
   isHoneypotEnabled: z.boolean().optional(),
   honeypotChannelId: discordId.nullable().optional(),
   honeypotAction: z.enum(HONEYPOT_ACTIONS).optional(),
+  isRepeatSpamEnabled: z.boolean().optional(),
+  repeatSpamChannelCount: z.number().int().min(REPEAT_SPAM_MIN_CHANNELS).max(REPEAT_SPAM_MAX_CHANNELS).optional(),
+  repeatSpamMatchMode: z.enum(REPEAT_SPAM_MATCH_MODES).optional(),
   // Birthdays
   isBirthdayEnabled: z.boolean().optional(),
   birthdayChannelId: discordId.nullable().optional(),

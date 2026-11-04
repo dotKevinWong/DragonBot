@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { Collection, type Message } from "discord.js";
-import { buildMessageDeletedEmbed } from "../../src/utils/message-log.js";
+import { buildMessageDeletedEmbed, buildRepeatSpamEmbed } from "../../src/utils/message-log.js";
 
 function fakeMessage(overrides: Record<string, unknown> = {}): Message {
   return {
@@ -110,5 +110,31 @@ describe("buildMessageDeletedEmbed", () => {
 
     expect(long.fields![2].value).toBe("x".repeat(1024));
     expect(empty.fields![2].value).toBe("*Empty*");
+  });
+});
+
+describe("buildRepeatSpamEmbed", () => {
+  it("builds the repeated-message embed", () => {
+    const message = fakeMessage({ content: "x".repeat(2000) }) as Message<true>;
+    const embed = buildRepeatSpamEmbed(message, ["a", "b", "c"], "Kicked.").toJSON();
+
+    expect(embed.title).toBe("Repeated Messages (Honeypot)");
+    expect(embed.description).toBe("Posted the same message in 3 channels.");
+    expect(embed.color).toBe(0xff0000);
+    expect(embed.author).toEqual({ name: "spammer#0001", icon_url: "https://cdn.example/u1.png" });
+    expect(embed.timestamp).toBeDefined();
+    expect(embed.fields!.map((f) => f.name)).toEqual(["Author", "Channels", "Content", "Honeypot Action", "ID"]);
+    expect(embed.fields![0]).toEqual({ name: "Author", value: "<@u1>", inline: true });
+    expect(embed.fields![1].value).toBe("<#a>, <#b>, <#c>");
+    expect(embed.fields![2].value).toBe("x".repeat(1024));
+    expect(embed.fields![3].value).toBe("Kicked.");
+    expect(embed.fields![4].value).toBe(["```js", "User: u1", "Message: m1", "Guild: g1", "", "```"].join("\n"));
+  });
+
+  it("marks empty content", () => {
+    const message = fakeMessage({ content: "" }) as Message<true>;
+    const embed = buildRepeatSpamEmbed(message, ["a", "b"], "Kicked.").toJSON();
+
+    expect(embed.fields![2].value).toBe("*Empty*");
   });
 });

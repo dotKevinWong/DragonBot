@@ -33,31 +33,45 @@ export class LoggingService {
   ): Promise<void> {
     const guild = await this.guildService.getSettings(guildId);
     if (!guild?.logChannelId) return;
-
-    try {
-      const channel = await fetchGuildTextChannel(client, guildId, guild.logChannelId, logger);
-      if (channel) {
-        await channel.send({ embeds: [embed] });
-      }
-    } catch (err) {
-      logger.warn({ err, guildId, channelId: guild.logChannelId }, "Failed to send log embed");
-    }
+    await this.sendToLogChannel(guildId, guild.logChannelId, embed, client, logger);
   }
 
   /**
-   * Sends a honeypot notice whenever logging is on and a log channel is set, whatever the event toggles.
+   * Sends a honeypot embed whenever logging is on and a log channel is set, whatever the event toggles.
    * A server that logs bans but not deletions still has to hear that someone is stuck banned.
    */
-  async sendNotice(guildId: string, description: string, client: Client, logger: Logger): Promise<void> {
+  async sendHoneypotEmbed(guildId: string, embed: EmbedBuilder, client: Client, logger: Logger): Promise<void> {
     const guild = await this.guildService.getSettings(guildId);
     if (!guild?.isLoggingEnabled || !guild.logChannelId) return;
+    await this.sendToLogChannel(guildId, guild.logChannelId, embed, client, logger);
+  }
 
+  /** Sends a honeypot notice, under the same rule as sendHoneypotEmbed. */
+  async sendNotice(guildId: string, description: string, client: Client, logger: Logger): Promise<void> {
     const embed = new EmbedBuilder()
       .setColor(0xf0b232)
       .setTitle("Honeypot")
       .setDescription(description)
       .setTimestamp();
 
-    await this.sendLogEmbed(guildId, embed, client, logger);
+    await this.sendHoneypotEmbed(guildId, embed, client, logger);
+  }
+
+  /** Never throws: a failed send is logged at warn. */
+  private async sendToLogChannel(
+    guildId: string,
+    logChannelId: string,
+    embed: EmbedBuilder,
+    client: Client,
+    logger: Logger,
+  ): Promise<void> {
+    try {
+      const channel = await fetchGuildTextChannel(client, guildId, logChannelId, logger);
+      if (channel) {
+        await channel.send({ embeds: [embed] });
+      }
+    } catch (err) {
+      logger.warn({ err, guildId, channelId: logChannelId }, "Failed to send log embed");
+    }
   }
 }
