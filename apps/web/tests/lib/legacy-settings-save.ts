@@ -1,8 +1,9 @@
 // Verbatim copy of the request-building part of handleSave in
-// apps/web/src/app/dashboard/server/[guildId]/page.tsx at git HEAD d09dc0c (lines 561-619),
-// wrapped in a function. Only `settings`, `savedSettings` and `hasDiscordData` were closure
-// variables; they are parameters here. Kept so the characterization tests can prove the
-// extracted buildSettingsPatch builds the same PATCH body. Do not edit.
+// apps/web/src/app/dashboard/server/[guildId]/page.tsx at origin/main bbf4b67 (lines 566-636), the last version
+// before buildSettingsPatch replaced it, wrapped in a function. (It was first copied at d09dc0c; the merge of main
+// brought in the repeated-message fields, so the copy was retaken from main.) Only `settings`, `savedSettings` and
+// `hasDiscordData` were closure variables; they are parameters here. Kept so the characterization tests can prove
+// the extracted buildSettingsPatch builds the same PATCH body. Do not edit.
 /* eslint-disable @typescript-eslint/no-explicit-any */
 export function legacyBuildUpdateFields(settings: any, savedSettings: any | null, hasDiscordData: boolean): Record<string, unknown> {
     // Always include non-Discord fields
@@ -39,13 +40,24 @@ export function legacyBuildUpdateFields(settings: any, savedSettings: any | null
 
     // Send the honeypot fields only when this tab changed them, so a tab loaded before another admin's change
     // can't turn the honeypot back on, or put back an old action or channel, on an unrelated save. A save that
-    // turns the honeypot on sends all three, so what gets armed is what this tab shows.
+    // turns the honeypot on sends all three, so what gets armed is what this tab shows. The repeated-message
+    // check works the same way: its three fields go only when changed, and a save that turns it on sends all three.
     const turnsHoneypotOn = settings.isHoneypotEnabled && !savedSettings?.isHoneypotEnabled;
     if (settings.isHoneypotEnabled !== savedSettings?.isHoneypotEnabled) {
       updateFields.isHoneypotEnabled = settings.isHoneypotEnabled;
     }
     if (turnsHoneypotOn || settings.honeypotAction !== savedSettings?.honeypotAction) {
       updateFields.honeypotAction = settings.honeypotAction;
+    }
+    const turnsRepeatSpamOn = settings.isRepeatSpamEnabled && !savedSettings?.isRepeatSpamEnabled;
+    if (settings.isRepeatSpamEnabled !== savedSettings?.isRepeatSpamEnabled) {
+      updateFields.isRepeatSpamEnabled = settings.isRepeatSpamEnabled;
+    }
+    if (turnsRepeatSpamOn || settings.repeatSpamChannelCount !== savedSettings?.repeatSpamChannelCount) {
+      updateFields.repeatSpamChannelCount = settings.repeatSpamChannelCount;
+    }
+    if (turnsRepeatSpamOn || settings.repeatSpamMatchMode !== savedSettings?.repeatSpamMatchMode) {
+      updateFields.repeatSpamMatchMode = settings.repeatSpamMatchMode;
     }
 
     // Only include role/channel IDs if we successfully loaded Discord data

@@ -60,6 +60,35 @@ describe("LoggingService.sendNotice", () => {
   });
 });
 
+describe("LoggingService.sendHoneypotEmbed", () => {
+  it("sends the embed whenever logging is on with a log channel, whatever the event toggles", async () => {
+    const { service, send, client, logger } = setup({ isLoggingEnabled: true, logChannelId: "log1", logEvents: [] });
+    const embed = new EmbedBuilder().setTitle("Repeated Messages (Honeypot)");
+
+    await service.sendHoneypotEmbed("g1", embed, client, logger);
+
+    expect(send).toHaveBeenCalledWith({ embeds: [embed] });
+  });
+
+  it("sends nothing when logging is off or no log channel is set", async () => {
+    const withEveryToggle = ["message_delete", "kick", "ban"];
+    const cases = [
+      { isLoggingEnabled: false, logChannelId: "log1", logEvents: withEveryToggle },
+      { isLoggingEnabled: true, logChannelId: null, logEvents: withEveryToggle },
+      null, // no settings row for the server
+    ];
+
+    for (const settings of cases) {
+      const { service, send, fetch, client, logger } = setup(settings);
+
+      await service.sendHoneypotEmbed("g1", new EmbedBuilder().setTitle("Repeated Messages (Honeypot)"), client, logger);
+
+      expect(send).not.toHaveBeenCalled();
+      expect(fetch).not.toHaveBeenCalled();
+    }
+  });
+});
+
 describe("LoggingService.sendLogEmbed", () => {
   it("never sends to a log channel in another server", async () => {
     // A dashboard manager of g1 set g1's log channel to a channel ID from g2.

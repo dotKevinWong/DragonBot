@@ -32,6 +32,8 @@ export default function ServerSettingsPage() {
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [hasDiscordData, setHasDiscordData] = useState(false);
   const [showHoneypotChannelHint, setShowHoneypotChannelHint] = useState(false);
+  // Typed text of the repeated-message channel count; null when not being edited
+  const [repeatCountText, setRepeatCountText] = useState<string | null>(null);
 
   const isDirty = useMemo(() => {
     if (!settings || !savedSettings) return false;
@@ -223,8 +225,9 @@ export default function ServerSettingsPage() {
       </Section>
 
       <Section title="Honeypot">
+        <p className="text-xs font-semibold text-dc-text-secondary uppercase tracking-wide">Channel trap</p>
         <Toggle
-          label="Enable honeypot"
+          label="Enable channel trap"
           checked={settings.isHoneypotEnabled}
           onChange={(v) => {
             // Turning it on needs a channel from the loaded list; turning it off always works
@@ -249,12 +252,53 @@ export default function ServerSettingsPage() {
             <option value="kick">Kick: removed, can rejoin</option>
           </select>
         </div>
-        <div className="border-t border-dc-border pt-3 mt-1 space-y-1 text-xs text-dc-text-muted">
-          <p>Changing these settings needs Manage Server or full dashboard access.</p>
+        <div className="space-y-1 text-xs text-dc-text-muted">
           <p>Their messages from the last hour are cleaned up across the whole server either way.</p>
           <p>Verified members only have the message deleted. Staff (Administrator, Manage Server, Kick Members or Ban Members) are ignored.</p>
+          <p>Pick a channel everyone can see and post in but nobody has a reason to use. Test it with an alt account: if you aren&apos;t staff, posting there removes you.</p>
+        </div>
+        <div className="border-t border-dc-border pt-3 mt-1 space-y-3">
+          <p className="text-xs font-semibold text-dc-text-secondary uppercase tracking-wide">Repeated messages</p>
+          <Toggle label="Enable repeated-message check" checked={settings.isRepeatSpamEnabled} onChange={(v) => update("isRepeatSpamEnabled", v)} />
+          <div>
+            <label className={FIELD_LABEL_CLASS}>Kick after the same message in this many channels</label>
+            {/* The 2 and 10 are REPEAT_SPAM_MIN_CHANNELS and REPEAT_SPAM_MAX_CHANNELS; this client component can't import @dragonbot/db */}
+            <input
+              type="number"
+              className={TEXT_INPUT_CLASS}
+              value={repeatCountText ?? String(settings.repeatSpamChannelCount)}
+              onChange={(e) => {
+                setRepeatCountText(e.target.value);
+                // A valid in-range number counts at once, so Save enables while typing and a click on it can't beat the blur
+                const n = Number(e.target.value);
+                if (e.target.value.trim() !== "" && Number.isInteger(n) && n >= 2 && n <= 10) update("repeatSpamChannelCount", n);
+              }}
+              onBlur={(e) => {
+                const n = parseInt(e.target.value, 10);
+                if (!Number.isNaN(n)) update("repeatSpamChannelCount", Math.min(10, Math.max(2, n)));
+                setRepeatCountText(null);
+              }}
+              min={2}
+              max={10}
+            />
+          </div>
+          <div>
+            <label className={FIELD_LABEL_CLASS}>Matching</label>
+            <select
+              className={SELECT_CLASS}
+              value={settings.repeatSpamMatchMode}
+              onChange={(e) => update("repeatSpamMatchMode", e.target.value === "exact" ? "exact" : e.target.value === "similar" ? "similar" : "ignore_case")}
+            >
+              <option value="exact">Word for word, case-sensitive</option>
+              <option value="ignore_case">Word for word, ignoring case</option>
+              <option value="similar">Too similar</option>
+            </select>
+          </div>
+          <p className="text-xs text-dc-text-muted">Kicks an account that posts the same message in several different channels within a minute, and cleans up its messages from the last hour. Short messages like &quot;gm&quot; never count. Verified members and staff are never affected.</p>
+        </div>
+        <div className="border-t border-dc-border pt-3 mt-1 space-y-1 text-xs text-dc-text-muted">
+          <p>Changing these settings needs Manage Server or full dashboard access.</p>
           <p>Honeypot bans are never copied to other servers by ban sync.</p>
-          <p>Pick a channel everyone can see and post in but nobody has a reason to use. Test it with an alt account: if you aren't staff, posting there removes you.</p>
         </div>
       </Section>
 

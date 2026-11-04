@@ -48,13 +48,24 @@ export function buildSettingsPatch(
 
   // Send the honeypot fields only when this tab changed them, so a tab loaded before another admin's change
   // can't turn the honeypot back on, or put back an old action or channel, on an unrelated save. A save that
-  // turns the honeypot on sends all three, so what gets armed is what this tab shows.
+  // turns the honeypot on sends all three, so what gets armed is what this tab shows. The repeated-message
+  // check works the same way: its three fields go only when changed, and a save that turns it on sends all three.
   const turnsHoneypotOn = settings.isHoneypotEnabled && !saved?.isHoneypotEnabled;
   if (settings.isHoneypotEnabled !== saved?.isHoneypotEnabled) {
     updateFields.isHoneypotEnabled = settings.isHoneypotEnabled;
   }
   if (turnsHoneypotOn || settings.honeypotAction !== saved?.honeypotAction) {
     updateFields.honeypotAction = settings.honeypotAction;
+  }
+  const turnsRepeatSpamOn = settings.isRepeatSpamEnabled && !saved?.isRepeatSpamEnabled;
+  if (settings.isRepeatSpamEnabled !== saved?.isRepeatSpamEnabled) {
+    updateFields.isRepeatSpamEnabled = settings.isRepeatSpamEnabled;
+  }
+  if (turnsRepeatSpamOn || settings.repeatSpamChannelCount !== saved?.repeatSpamChannelCount) {
+    updateFields.repeatSpamChannelCount = settings.repeatSpamChannelCount;
+  }
+  if (turnsRepeatSpamOn || settings.repeatSpamMatchMode !== saved?.repeatSpamMatchMode) {
+    updateFields.repeatSpamMatchMode = settings.repeatSpamMatchMode;
   }
 
   // Only include role/channel IDs if we successfully loaded Discord data

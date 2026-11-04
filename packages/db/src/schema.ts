@@ -10,7 +10,7 @@ import {
   index,
   jsonb,
 } from "drizzle-orm/pg-core";
-import { HONEYPOT_ACTIONS } from "./honeypot";
+import { HONEYPOT_ACTIONS, REPEAT_SPAM_DEFAULT_CHANNELS, REPEAT_SPAM_MATCH_MODES } from "./honeypot";
 
 export const users = pgTable("users", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -87,6 +87,9 @@ export const guilds = pgTable("guilds", {
   honeypotAction: text("honeypot_action", { enum: HONEYPOT_ACTIONS }).notNull().default("kick"),
   honeypotWarningChannelId: varchar("honeypot_warning_channel_id", { length: 20 }), // bot-managed
   honeypotWarningMessageId: varchar("honeypot_warning_message_id", { length: 20 }), // bot-managed
+  isRepeatSpamEnabled: boolean("is_repeat_spam_enabled").notNull().default(false),
+  repeatSpamChannelCount: integer("repeat_spam_channel_count").notNull().default(REPEAT_SPAM_DEFAULT_CHANNELS),
+  repeatSpamMatchMode: text("repeat_spam_match_mode", { enum: REPEAT_SPAM_MATCH_MODES }).notNull().default("ignore_case"),
 
   // Suggestions
   isSuggestionsEnabled: boolean("is_suggestions_enabled").notNull().default(true),

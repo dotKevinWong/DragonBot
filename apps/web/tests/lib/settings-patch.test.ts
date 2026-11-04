@@ -78,6 +78,9 @@ function makeSettings(overrides: Partial<GuildSettings> = {}): GuildSettings {
     isHoneypotEnabled: false,
     honeypotChannelId: null,
     honeypotAction: "kick",
+    isRepeatSpamEnabled: false,
+    repeatSpamChannelCount: 3,
+    repeatSpamMatchMode: "ignore_case",
     isSuggestionsEnabled: true,
     isAskEnabled: true,
     askSystemPrompt: null,
@@ -193,14 +196,14 @@ describe("buildSettingsPatch", () => {
     for (const k of [...DISCORD_IDS, "honeypotChannelId"]) expect(k in body).toBe(false);
   });
 
-  it("saved = null: honeypot fields compare against undefined", () => {
+  it("saved = null: honeypot and repeated-message fields compare against undefined", () => {
     const off = build(makeSettings(), null, true);
-    expect(Object.keys(off)).toEqual([...ALWAYS_SENT, "isHoneypotEnabled", "honeypotAction", ...DISCORD_IDS, "honeypotChannelId"]);
+    expect(Object.keys(off)).toEqual([...ALWAYS_SENT, "isHoneypotEnabled", "honeypotAction", "isRepeatSpamEnabled", "repeatSpamChannelCount", "repeatSpamMatchMode", ...DISCORD_IDS, "honeypotChannelId"]);
     expect(off.isHoneypotEnabled).toBe(false);
     expect(off.honeypotChannelId).toBeNull();
 
     const on = build(makeSettings({ isHoneypotEnabled: true, honeypotChannelId: HP_CHANNEL }), null, false);
-    expect(Object.keys(on)).toEqual([...ALWAYS_SENT, "isHoneypotEnabled", "honeypotAction"]);
+    expect(Object.keys(on)).toEqual([...ALWAYS_SENT, "isHoneypotEnabled", "honeypotAction", "isRepeatSpamEnabled", "repeatSpamChannelCount", "repeatSpamMatchMode"]);
   });
 
   it("matches the legacy logic over every honeypot combination", () => {
@@ -226,6 +229,54 @@ describe("buildSettingsPatch", () => {
     expect(cases).toBe(576);
   });
 
+  it("leaves out the repeated-message fields when they equal the saved ones", () => {
+    const s = makeSettings({ isRepeatSpamEnabled: true, repeatSpamChannelCount: 5, repeatSpamMatchMode: "similar" });
+    expect(Object.keys(build(s, { ...s }, false))).toEqual(ALWAYS_SENT);
+  });
+
+  it("sends all three repeated-message fields when the save turns the check on, even if count and mode are unchanged", () => {
+    const saved = makeSettings();
+    const body = build({ ...saved, isRepeatSpamEnabled: true }, saved, true);
+    expect(Object.keys(body)).toEqual([...ALWAYS_SENT, "isRepeatSpamEnabled", "repeatSpamChannelCount", "repeatSpamMatchMode", ...DISCORD_IDS]);
+    expect(body.isRepeatSpamEnabled).toBe(true);
+    expect(body.repeatSpamChannelCount).toBe(3);
+    expect(body.repeatSpamMatchMode).toBe("ignore_case");
+  });
+
+  it("turning the check off sends only its flag; a changed count or mode goes on its own", () => {
+    const saved = makeSettings({ isRepeatSpamEnabled: true });
+    expect(Object.keys(build({ ...saved, isRepeatSpamEnabled: false }, saved, false))).toEqual([...ALWAYS_SENT, "isRepeatSpamEnabled"]);
+    expect(Object.keys(build({ ...saved, repeatSpamChannelCount: 4 }, saved, false))).toEqual([...ALWAYS_SENT, "repeatSpamChannelCount"]);
+    expect(Object.keys(build({ ...saved, repeatSpamMatchMode: "exact" }, saved, false))).toEqual([...ALWAYS_SENT, "repeatSpamMatchMode"]);
+  });
+
+  it("matches the legacy logic over every repeated-message combination, alongside a honeypot change", () => {
+    const modes = ["exact", "ignore_case", "similar"] as const;
+    let cases = 0;
+    for (const savedEnabled of [true, false])
+      for (const enabled of [true, false])
+        for (const savedCount of [2, 3])
+          for (const count of [2, 3])
+            for (const savedMode of modes)
+              for (const mode of modes)
+                for (const honeypotOn of [true, false])
+                  for (const savedIsNull of [false, true]) {
+                    const saved = savedIsNull
+                      ? null
+                      : makeSettings({ isRepeatSpamEnabled: savedEnabled, repeatSpamChannelCount: savedCount, repeatSpamMatchMode: savedMode });
+                    const s = makeSettings({
+                      isRepeatSpamEnabled: enabled,
+                      repeatSpamChannelCount: count,
+                      repeatSpamMatchMode: mode,
+                      isHoneypotEnabled: honeypotOn,
+                      honeypotChannelId: HP_CHANNEL,
+                    });
+                    build(s, saved, cases % 2 === 0);
+                    cases++;
+                  }
+    expect(cases).toBe(576);
+  });
+
   it("does not mutate its inputs and returns a fresh object", () => {
     const s = makeSettings({ isHoneypotEnabled: true });
     const saved = makeSettings();
@@ -239,8 +290,9 @@ describe("buildSettingsPatch", () => {
   });
 
   it("every key it can send is accepted by guildSettingsUpdateSchema and has a FIELD_SCOPE_MAP entry", () => {
-    const s = makeSettings({ isHoneypotEnabled: true, honeypotChannelId: HP_CHANNEL });
+    const s = makeSettings({ isHoneypotEnabled: true, honeypotChannelId: HP_CHANNEL, isRepeatSpamEnabled: true });
     const body = build(s, null, true);
+    expect(body).toHaveProperty("repeatSpamMatchMode");
     const parsed = guildSettingsUpdateSchema.safeParse(body);
     expect(parsed.success).toBe(true);
     expect(Object.keys(parsed.data!).sort()).toEqual(Object.keys(body).sort());

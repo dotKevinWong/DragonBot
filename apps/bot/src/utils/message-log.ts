@@ -32,3 +32,36 @@ export function buildMessageDeletedEmbed(
     )
     .setTimestamp();
 }
+
+/**
+ * The repeated-message check's log embed: the account, the channels its copies reached, the message text and what
+ * DragonBot did. message is the copy that triggered the case.
+ */
+export function buildRepeatSpamEmbed(message: Message<true>, channelIds: string[], actionText: string): EmbedBuilder {
+  return new EmbedBuilder()
+    .setColor(0xff0000)
+    .setAuthor({
+      name: message.author.tag,
+      iconURL: message.author.displayAvatarURL(),
+    })
+    .setTitle("Repeated Messages (Honeypot)")
+    .setDescription(`Posted the same message in ${channelIds.length} channels.`)
+    .addFields(
+      { name: "Author", value: `<@${message.author.id}>`, inline: true },
+      { name: "Channels", value: channelIds.map((id) => `<#${id}>`).join(", ").slice(0, 1024) },
+      { name: "Content", value: message.content.slice(0, 1024) || "*Empty*" },
+      { name: "Honeypot Action", value: actionText },
+      {
+        name: "ID",
+        value: [
+          "```js",
+          `User: ${message.author.id}`,
+          `Message: ${message.id}`,
+          `Guild: ${message.guildId}`,
+          "",
+          "```",
+        ].join("\n"),
+      },
+    )
+    .setTimestamp();
+}

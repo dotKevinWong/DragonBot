@@ -26,6 +26,7 @@ describe("FIELD_SCOPE_MAP", () => {
       ["verificationRoleId", "verification"], ["isVerificationSyncEnabled", "verification"],
       ["isBanSyncEnabled", "moderation"], ["modNotesChannelId", "moderation"],
       ["isHoneypotEnabled", "*"], ["honeypotChannelId", "*"], ["honeypotAction", "*"],
+      ["isRepeatSpamEnabled", "*"], ["repeatSpamChannelCount", "*"], ["repeatSpamMatchMode", "*"],
       ["welcomeChannelId", "welcome"], ["welcomeMessage", "welcome"], ["isWelcomeEnabled", "welcome"],
       ["dmWelcomeMessage", "welcome"], ["isDmWelcomeEnabled", "welcome"],
       ["logChannelId", "logging"], ["isLoggingEnabled", "logging"], ["logEvents", "logging"],

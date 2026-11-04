@@ -1,6 +1,7 @@
 import { EmbedBuilder, type Message } from "discord.js";
 import { deleteLateMessage, handleHoneypotMessage } from "../lib/honeypot-enforcer.js";
 import type { GuildRow } from "@dragonbot/db";
+import { handleRepeatSpamMessage } from "../lib/repeat-spam-enforcer.js";
 import type { BotEvent } from "../types/commands.js";
 import type { BotContext } from "../types/context.js";
 import { validateIntroduction } from "../utils/intro-validator.js";
@@ -20,6 +21,8 @@ const event: BotEvent<"messageCreate"> = {
     if ((await handleHoneypotMessage(message, guild, ctx)) === "handled") return;
     // Messages from an account the honeypot just removed are deleted on arrival
     if (await deleteLateMessage(message, ctx)) return;
+    // Repeated-message check: the same message in several channels gets the account kicked
+    if ((await handleRepeatSpamMessage(message, guild, ctx)) === "handled") return;
 
     // A rejected intro earns no XP and posts no level-up. This holds even if the delete
     // failed: the message was still rejected, and the user was told to try again.

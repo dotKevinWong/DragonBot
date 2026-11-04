@@ -7,6 +7,11 @@ vi.mock("../../src/lib/honeypot-enforcer.js", () => ({
   deleteLateMessage: vi.fn(async () => false),
 }));
 
+// The repeated-message check catches nothing here; message-create.order.test.ts covers where it runs.
+vi.mock("../../src/lib/repeat-spam-enforcer.js", () => ({
+  handleRepeatSpamMessage: vi.fn(async () => "not_caught"),
+}));
+
 const validateIntroduction = vi.fn((_content: string, _options: unknown) => ({ valid: true, reason: "" }));
 vi.mock("../../src/utils/intro-validator.js", () => ({
   validateIntroduction: (content: string, options: unknown) => validateIntroduction(content, options),

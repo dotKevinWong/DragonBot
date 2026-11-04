@@ -112,6 +112,7 @@ vi.mock("../src/services/xp-archive.service.js", () => ({ XpArchiveService: h.mk
 vi.mock("../src/services/birthday.service.js", () => ({ BirthdayService: h.mk("BirthdayService") }));
 vi.mock("../src/services/youtube.service.js", () => ({ YouTubeService: h.mk("YouTubeService") }));
 vi.mock("../src/services/honeypot.service.js", () => ({ HoneypotService: h.mk("HoneypotService", ["drain"]) }));
+vi.mock("../src/services/repeat-spam.service.js", () => ({ RepeatSpamService: h.mk("RepeatSpamService", []) }));
 vi.mock("../src/lib/scheduler.js", () => ({ SchedulerManager: h.mk("SchedulerManager", ["loadAll", "reload"]) }));
 vi.mock("../src/lib/birthday-checker.js", () => ({ BirthdayChecker: h.mk("BirthdayChecker", ["check"]) }));
 vi.mock("../src/lib/youtube-checker.js", () => ({ YouTubeChecker: h.mk("YouTubeChecker", ["check"]) }));
@@ -251,6 +252,7 @@ describe("index.ts wiring (before clientReady)", () => {
       "new YouTubeRepository",
       "new YouTubeService",
       "new HoneypotService",
+      "new RepeatSpamService",
       "new XpArchiveRepository",
       "new XpArchiveService",
       "loadCommands:commands",
@@ -309,6 +311,7 @@ describe("index.ts wiring (before clientReady)", () => {
     expect(a.BirthdayService[0]).toBe(i.BirthdayRepository);
     expect(a.YouTubeService).toEqual([]);
     expect(a.HoneypotService).toEqual([]);
+    expect(a.RepeatSpamService).toEqual([]);
     expect(a.XpArchiveService[0]).toBe(i.XpService);
     expect(a.XpArchiveService[1]).toBe(i.XpArchiveRepository);
   });
@@ -336,6 +339,7 @@ describe("index.ts wiring (before clientReady)", () => {
       birthday: i.BirthdayService,
       youtube: i.YouTubeService,
       honeypot: i.HoneypotService,
+      repeatSpam: i.RepeatSpamService,
     });
     expect(Object.keys(ctx.services)).toEqual([
       "user",
@@ -352,6 +356,7 @@ describe("index.ts wiring (before clientReady)", () => {
       "birthday",
       "youtube",
       "honeypot",
+      "repeatSpam",
     ]);
   });
 

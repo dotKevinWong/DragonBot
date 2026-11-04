@@ -8,7 +8,13 @@ import type { BotCommand } from "../types/commands.js";
 import { AppError } from "../types/errors.js";
 import { successEmbed, errorEmbed, infoEmbed } from "../utils/embeds.js";
 import { replyServerOnly } from "../utils/command-helpers.js";
-import { PERMISSION_SCOPES, missingScopes } from "@dragonbot/db";
+import { PERMISSION_SCOPES, missingScopes, type RepeatSpamMatchMode } from "@dragonbot/db";
+
+const REPEAT_MATCH_LABELS: Record<RepeatSpamMatchMode, string> = {
+  exact: "Word for word, case-sensitive",
+  ignore_case: "Word for word, ignoring case",
+  similar: "Too similar",
+};
 
 /** The permissions option as a list: each item trimmed and lowercased. Empty items and duplicates are kept. */
 function parsePermissionList(permStr: string): string[] {
@@ -138,6 +144,7 @@ const command: BotCommand = {
         `**Intro Role:** ${settings.introRoleId ? `<@&${settings.introRoleId}>` : "Not set"}`,
         `**Mod Notes:** ${settings.modNotesChannelId ? `<#${settings.modNotesChannelId}>` : "Not set"}`,
         `**Honeypot:** ${settings.isHoneypotEnabled ? "Enabled" : "Disabled"} ${settings.honeypotChannelId ? `in <#${settings.honeypotChannelId}>` : ""} (${settings.honeypotAction === "ban" ? "Ban" : "Kick"}, warning ${settings.honeypotWarningChannelId === settings.honeypotChannelId && settings.honeypotWarningMessageId ? "posted" : "not posted"})`,
+        `**Repeated messages:** ${settings.isRepeatSpamEnabled ? "Enabled" : "Disabled"} (kick after ${settings.repeatSpamChannelCount} channels, ${REPEAT_MATCH_LABELS[settings.repeatSpamMatchMode]})`,
         `**Suggestions:** ${settings.isSuggestionsEnabled ? "Enabled" : "Disabled"}`,
         `**AI Ask:** ${settings.isAskEnabled ? "Enabled" : "Disabled"}`,
         `**XP:** ${settings.isXpEnabled ? "Enabled" : "Disabled"} (${settings.xpMin}–${settings.xpMax} XP, ${settings.xpCooldownSeconds}s cooldown)`,

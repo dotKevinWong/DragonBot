@@ -28,6 +28,7 @@ import { BirthdayService } from "../services/birthday.service.js";
 import { YouTubeRepository } from "../repositories/youtube.repository.js";
 import { YouTubeService } from "../services/youtube.service.js";
 import { HoneypotService } from "../services/honeypot.service.js";
+import { RepeatSpamService } from "../services/repeat-spam.service.js";
 import type { BotContext } from "../types/context.js";
 
 export interface BuiltServices {
@@ -72,6 +73,7 @@ export function buildServices(config: AppConfig, logger: Logger, db: DrizzleClie
   const youtubeRepo = new YouTubeRepository(db);
   const youtubeService = new YouTubeService();
   const honeypotService = new HoneypotService();
+  const repeatSpamService = new RepeatSpamService();
   const xpArchiveRepo = new XpArchiveRepository(db);
   const xpArchiveService = new XpArchiveService(xpService, xpArchiveRepo);
 
@@ -92,6 +94,7 @@ export function buildServices(config: AppConfig, logger: Logger, db: DrizzleClie
       birthday: birthdayService,
       youtube: youtubeService,
       honeypot: honeypotService,
+      repeatSpam: repeatSpamService,
     },
     youtubeRepo,
   };

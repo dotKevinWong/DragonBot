@@ -25,10 +25,14 @@ export const FIELD_SCOPE_MAP: Record<string, PermissionScope> = {
   // Moderation
   isBanSyncEnabled: "moderation",
   modNotesChannelId: "moderation",
-  // Honeypot: full access only (Manage Server or the "*" grant), because these decide who gets kicked or banned
+  // Honeypot: full access only (Manage Server or the "*" grant), because these decide who gets kicked or banned;
+  // the repeated-message fields also decide who gets kicked
   isHoneypotEnabled: "*",
   honeypotChannelId: "*",
   honeypotAction: "*",
+  isRepeatSpamEnabled: "*",
+  repeatSpamChannelCount: "*",
+  repeatSpamMatchMode: "*",
   // Welcome
   welcomeChannelId: "welcome",
   welcomeMessage: "welcome",

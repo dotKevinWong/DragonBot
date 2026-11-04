@@ -32,6 +32,9 @@ export interface GuildSettings {
   isHoneypotEnabled: boolean;
   honeypotChannelId: string | null;
   honeypotAction: "kick" | "ban";
+  isRepeatSpamEnabled: boolean;
+  repeatSpamChannelCount: number;
+  repeatSpamMatchMode: "exact" | "ignore_case" | "similar";
   isSuggestionsEnabled: boolean;
   isAskEnabled: boolean;
   askSystemPrompt: string | null;
