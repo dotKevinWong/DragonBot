@@ -1,10 +1,6 @@
 import { z } from "zod";
-import { HONEYPOT_ACTIONS } from "@dragonbot/db";
-
-const VALID_LOG_EVENTS = [
-  "member_join", "member_leave", "message_delete", "message_edit",
-  "role_change", "nickname_change", "voice_activity", "kick", "ban",
-] as const;
+import { HONEYPOT_ACTIONS } from "@dragonbot/db/honeypot";
+import { DISCORD_SNOWFLAKE_RE, LOG_EVENTS } from "@dragonbot/db/contracts";
 
 /** Validates a 5-field cron expression with proper per-field range checking */
 function isValidCronField(value: string, min: number, max: number): boolean {
@@ -37,7 +33,7 @@ function isValidCronField(value: string, min: number, max: number): boolean {
   });
 }
 
-export const DISCORD_SNOWFLAKE_RE = /^[0-9]{17,20}$/;
+export { DISCORD_SNOWFLAKE_RE };
 
 export const cronExpressionSchema = z
   .string()
@@ -96,7 +92,7 @@ export const profileUpdateSchema = z.object({
   return true;
 }, { message: "Invalid birthday: check month/day combination", path: ["birthDay"] });
 
-const discordId = z.string().regex(/^[0-9]{17,20}$/);
+const discordId = z.string().regex(DISCORD_SNOWFLAKE_RE);
 
 export const guildSettingsUpdateSchema = z.object({
   verificationRoleId: discordId.nullable().optional(),
@@ -109,7 +105,7 @@ export const guildSettingsUpdateSchema = z.object({
   isDmWelcomeEnabled: z.boolean().optional(),
   logChannelId: discordId.nullable().optional(),
   isLoggingEnabled: z.boolean().optional(),
-  logEvents: z.array(z.enum(VALID_LOG_EVENTS)).optional(),
+  logEvents: z.array(z.enum(LOG_EVENTS)).optional(),
   introChannelId: discordId.nullable().optional(),
   introRoleId: discordId.nullable().optional(),
   isIntroGateEnabled: z.boolean().optional(),

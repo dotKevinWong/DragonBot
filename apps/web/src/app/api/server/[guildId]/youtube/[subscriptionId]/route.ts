@@ -1,14 +1,11 @@
 import { NextResponse } from "next/server";
+import { requireGuildAccess, FEATURE_ROUTE_BODIES, invalidDataResponse } from "@/lib/route-guard";
 import { eq, and } from "drizzle-orm";
-import { youtubeSubscriptions } from "@dragonbot/db";
+import { youtubeSubscriptions } from "@dragonbot/db/schema";
 import { db } from "@/lib/db";
-import { getAuthenticatedUser } from "@/lib/auth";
-import { checkGuildPermission } from "@/lib/discord";
 import { z } from "zod";
 import { notifyBotReload } from "@/lib/bot-webhook";
 import { DISCORD_SNOWFLAKE_RE } from "@/lib/validators";
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const updateSchema = z.object({
   notifyChannelId: z.string().regex(DISCORD_SNOWFLAKE_RE, "Invalid channel ID").optional(),
@@ -21,29 +18,14 @@ export async function PATCH(
   request: Request,
   { params }: { params: Promise<{ guildId: string; subscriptionId: string }> },
 ) {
-  const discordId = await getAuthenticatedUser(request);
-  if (!discordId) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
-  const { guildId, subscriptionId } = await params;
-
-  if (!DISCORD_SNOWFLAKE_RE.test(guildId) || !UUID_RE.test(subscriptionId)) {
-    return NextResponse.json({ error: "Not found", code: "NOT_FOUND" }, { status: 404 });
-  }
-
-  const hasPermission = await checkGuildPermission(guildId, discordId, "youtube");
-  if (!hasPermission) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-  }
+  const access = await requireGuildAccess(request, params, { bodies: FEATURE_ROUTE_BODIES, uuidParams: ["subscriptionId"], scope: "youtube" });
+  if (!access.ok) return access.response;
+  const { guildId, subscriptionId } = access.params;
 
   const body = await request.json();
   const parsed = updateSchema.safeParse(body);
   if (!parsed.success) {
-    return NextResponse.json(
-      { error: "Invalid data", ...(process.env.NODE_ENV !== "production" && { details: parsed.error.issues }) },
-      { status: 400 },
-    );
+    return invalidDataResponse(parsed.error.issues, { withCode: false });
   }
 
   const rows = await db
@@ -64,21 +46,9 @@ export async function DELETE(
   request: Request,
   { params }: { params: Promise<{ guildId: string; subscriptionId: string }> },
 ) {
-  const discordId = await getAuthenticatedUser(request);
-  if (!discordId) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
-  const { guildId, subscriptionId } = await params;
-
-  if (!DISCORD_SNOWFLAKE_RE.test(guildId) || !UUID_RE.test(subscriptionId)) {
-    return NextResponse.json({ error: "Not found", code: "NOT_FOUND" }, { status: 404 });
-  }
-
-  const hasPermission = await checkGuildPermission(guildId, discordId, "youtube");
-  if (!hasPermission) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-  }
+  const access = await requireGuildAccess(request, params, { bodies: FEATURE_ROUTE_BODIES, uuidParams: ["subscriptionId"], scope: "youtube" });
+  if (!access.ok) return access.response;
+  const { guildId, subscriptionId } = access.params;
 
   const rows = await db
     .delete(youtubeSubscriptions)

@@ -17,29 +17,6 @@ export const PERMISSION_SCOPES = [
 
 export type PermissionScope = (typeof PERMISSION_SCOPES)[number];
 
-/** Maps bot /admin subcommand names → required permission scope */
-export const SUBCOMMAND_SCOPE_MAP: Record<string, PermissionScope> = {
-  "verification-role": "verification",
-  "verification-sync": "verification",
-  "ban-sync": "moderation",
-  "welcome-message-toggle": "welcome",
-  "welcome-message": "welcome",
-  "welcome-message-channel": "welcome",
-  "dm-message-toggle": "welcome",
-  "dm-message": "welcome",
-  "log-channel": "logging",
-  "log-toggle": "logging",
-  "log-events": "logging",
-  "intro-channel": "intro_gate",
-  "intro-role": "intro_gate",
-  "intro-toggle": "intro_gate",
-  "mod-notes-channel": "moderation",
-  "offtopic-message": "offtopic",
-  "ask-toggle": "ai",
-  // view-settings: any permission grants read access (handled specially)
-  // managers-*: requires "managers" scope (handled specially)
-};
-
 /** Maps guild settings field names → required permission scope (for web PATCH validation) */
 export const FIELD_SCOPE_MAP: Record<string, PermissionScope> = {
   // Verification
@@ -96,3 +73,40 @@ export const FIELD_SCOPE_MAP: Record<string, PermissionScope> = {
   // YouTube
   isYoutubeEnabled: "youtube",
 };
+
+/**
+ * Whether a list of granted scopes allows `scope`.
+ * An empty grant list allows nothing. A "*" grant allows everything.
+ * With no scope (or an empty one) any non-empty grant allows it: that is read access.
+ * Otherwise the exact scope must be granted (case-sensitive).
+ */
+export function grantsScope(grants: readonly string[], scope?: string): boolean {
+  if (grants.length === 0) return false;
+  if (grants.includes("*")) return true;
+  if (!scope) return true;
+  return grants.includes(scope);
+}
+
+/**
+ * The scopes the settings fields need, mapped through FIELD_SCOPE_MAP.
+ * Unmapped fields are dropped; each scope appears once, in first-seen order.
+ */
+export function requiredScopesForFields(fields: Iterable<string>): string[] {
+  const requiredScopes = new Set<string>();
+  for (const field of fields) {
+    const scope = FIELD_SCOPE_MAP[field];
+    if (scope) {
+      requiredScopes.add(scope);
+    }
+  }
+  return [...requiredScopes];
+}
+
+/**
+ * The required scopes the caller lacks, in the order given.
+ * A "*" grant lacks nothing. Otherwise a required "*" is reported as "*".
+ */
+export function missingScopes(required: Iterable<string>, grants: readonly string[]): string[] {
+  if (grants.includes("*")) return [];
+  return [...required].filter((scope) => !grants.includes(scope));
+}

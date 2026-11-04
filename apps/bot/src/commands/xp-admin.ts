@@ -6,6 +6,7 @@ import {
 import type { BotContext } from "../types/context.js";
 import type { BotCommand } from "../types/commands.js";
 import { AppError } from "../types/errors.js";
+import { UUID_RE } from "@dragonbot/db";
 import { successEmbed, errorEmbed, infoEmbed } from "../utils/embeds.js";
 
 let lastFlushAt = 0;
@@ -233,7 +234,7 @@ const command: BotCommand = {
           const log = ctx.logger.child({ command: "xp-admin", sub: "restore", guildId, archiveId });
 
           // Validate UUID format
-          if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(archiveId)) {
+          if (!UUID_RE.test(archiveId)) {
             await interaction.editReply({ embeds: [errorEmbed("Invalid archive ID format.")] });
             break;
           }

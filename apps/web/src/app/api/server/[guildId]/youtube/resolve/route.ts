@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
-import { getAuthenticatedUser } from "@/lib/auth";
-import { checkGuildPermission } from "@/lib/discord";
-import { DISCORD_SNOWFLAKE_RE } from "@/lib/validators";
+import { requireGuildAccess, FEATURE_ROUTE_BODIES } from "@/lib/route-guard";
+import { YOUTUBE_CHANNEL_ID_RE } from "@dragonbot/db/contracts";
 
 /**
  * Resolve a YouTube URL, @handle, or channel name to a channel ID + name.
@@ -11,21 +10,8 @@ export async function POST(
   request: Request,
   { params }: { params: Promise<{ guildId: string }> },
 ) {
-  const discordId = await getAuthenticatedUser(request);
-  if (!discordId) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
-  const { guildId } = await params;
-
-  if (!DISCORD_SNOWFLAKE_RE.test(guildId)) {
-    return NextResponse.json({ error: "Not found", code: "NOT_FOUND" }, { status: 404 });
-  }
-
-  const hasPermission = await checkGuildPermission(guildId, discordId, "youtube");
-  if (!hasPermission) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-  }
+  const access = await requireGuildAccess(request, params, { bodies: FEATURE_ROUTE_BODIES, scope: "youtube" });
+  if (!access.ok) return access.response;
 
   const body = await request.json();
   const query = (body.query as string)?.trim();
@@ -51,7 +37,7 @@ interface ResolvedChannel {
 
 async function resolveYouTubeChannel(query: string): Promise<ResolvedChannel | null> {
   // Already a channel ID (UC + 22 chars)
-  if (/^UC[\w-]{22}$/.test(query)) {
+  if (YOUTUBE_CHANNEL_ID_RE.test(query)) {
     const name = await fetchChannelName(`https://www.youtube.com/channel/${query}`);
     return { channelId: query, channelName: name ?? query };
   }

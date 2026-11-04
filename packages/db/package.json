@@ -6,7 +6,10 @@
   "exports": {
     ".": "./src/index.ts",
     "./schema": "./src/schema.ts",
-    "./serverless": "./src/serverless.ts"
+    "./serverless": "./src/serverless.ts",
+    "./permissions": "./src/permissions.ts",
+    "./honeypot": "./src/honeypot.ts",
+    "./contracts": "./src/contracts.ts"
   },
   "scripts": {
     "build": "echo 'db build complete'",

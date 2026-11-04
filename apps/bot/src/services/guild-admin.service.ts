@@ -1,6 +1,6 @@
 import { GuildAdminRepository } from "../repositories/guild-admin.repository.js";
 import { AppError, ErrorCode } from "../types/errors.js";
-import { PERMISSION_SCOPES, type PermissionScope } from "@dragonbot/db";
+import { PERMISSION_SCOPES, grantsScope, type PermissionScope } from "@dragonbot/db";
 import { TTLCache } from "../utils/cache.js";
 
 interface CachedAdmin {
@@ -32,13 +32,13 @@ export class GuildAdminService {
   async hasPermission(guildId: string, discordId: string, scope: PermissionScope): Promise<boolean> {
     const admin = await this.getCachedAdmin(guildId, discordId);
     if (!admin) return false;
-    return admin.permissions.includes("*") || admin.permissions.includes(scope);
+    return grantsScope(admin.permissions, scope);
   }
 
   /** Check if a user has ANY permission for a guild (used for view-settings) */
   async hasAnyPermission(guildId: string, discordId: string): Promise<boolean> {
     const admin = await this.getCachedAdmin(guildId, discordId);
-    return admin !== null && admin.permissions.length > 0;
+    return admin !== null && grantsScope(admin.permissions);
   }
 
   /** Get all permissions for a user in a guild */

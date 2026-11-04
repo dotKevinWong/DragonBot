@@ -83,11 +83,12 @@ pnpm-workspace.yaml       Lists apps/*, packages/* and scripts (no scripts/ dire
 | `lib/env.ts` | Lazy zod-validated `env` Proxy |
 | `lib/db.ts` | Lazy `db` Proxy over `createServerlessClient` |
 | `lib/auth.ts` | `signJwt`, `verifyJwt`, `getDiscordIdFromRequest` (no revocation check), `getAuthenticatedUser` (checks `users.jwt_invalid_before`), session cookie helpers |
-| `lib/discord.ts` | Discord REST v10 with the bot token: `checkGuildPermission`, `getUserGuildPermissions`, `isGuildMember`, `getDiscordUser`, `resolveDiscordUsers` (10-min cache), `getGuildIconUrl` |
+| `lib/discord.ts` | Discord REST v10 with the bot token: `checkGuildPermission`, `getUserGuildPermissions`, `isGuildMember`, `getDiscordUser`, `resolveDiscordUsers` (10-min cache), `getGuildIconUrl`; `createDiscordLookupMemo()` gives a per-request `DiscordLookupMemo` (successful guild and member lookups only, never kept across requests) that the permission, membership and icon calls accept |
 | `lib/bot-webhook.ts` | `notifyBotReload(guildId)`: fire-and-forget POST to the bot |
 | `lib/rate-limit.ts` | `isRateLimited` (fixed window, in-memory per instance) |
 | `lib/validators.ts` | `DISCORD_SNOWFLAKE_RE`, `cronExpressionSchema`, `embedColorSchema`, `profileUpdateSchema`, `guildSettingsUpdateSchema` |
-| `lib/sync.ts` | `markSchedulesDirty` (writes `sync_flags`; no importers) |
+| `lib/route-guard.ts` | Guild route guard: `authenticateGuildRequest` (401, then 404 for a bad snowflake or UUID param), `requireGuildAccess` (adds the 403 permission check), per-route frozen error bodies (`FEATURE_ROUTE_BODIES`, `SETTINGS_ROUTE_BODIES`, `DISCORD_ROUTE_BODIES`; routes differ on purpose), `invalidDataResponse` (400 zod body) |
+| `lib/safe-rows.ts` | `toSafeGuild`, `toSafeUser`: denylists that strip server-only columns before a row is sent to the browser; add each new sensitive column here |
 | `app/api/**/route.ts` | API routes (table below) |
 | `app/page.tsx`, `app/oauth/page.tsx` | Landing page; token exchange page |
 | `app/dashboard/layout.tsx` | Sidebar shell (`GET /api/guilds`, `GET /api/auth`) |
@@ -101,8 +102,10 @@ pnpm-workspace.yaml       Lists apps/*, packages/* and scripts (no scripts/ dire
 - `schema.ts` — all tables, `GuildRow`
 - `client.ts` — `createBotClient(url)` (postgres-js), `DrizzleClient`; logs every query with `console.log`
 - `serverless.ts` — `createServerlessClient(url)` (neon-http, no transactions); subpath `@dragonbot/db/serverless`
-- `permissions.ts` — `PERMISSION_SCOPES`, `PermissionScope`, `FIELD_SCOPE_MAP`, `SUBCOMMAND_SCOPE_MAP` (no consumers)
-- `honeypot.ts` — `HONEYPOT_ACTIONS`, `HoneypotAction`, `HONEYPOT_CONFLICT_FIELDS`, `findHoneypotChannelConflict`
+- `permissions.ts` — `PERMISSION_SCOPES`, `PermissionScope`, `FIELD_SCOPE_MAP`, `grantsScope`, `requiredScopesForFields`, `missingScopes`; subpath `@dragonbot/db/permissions`
+- `honeypot.ts` — `HONEYPOT_ACTIONS`, `HoneypotAction`, `HONEYPOT_CONFLICT_FIELDS`, `findHoneypotChannelConflict`; subpath `@dragonbot/db/honeypot`
+- `contracts.ts` — `LOG_EVENTS`/`LogEventType`, `SUGGESTION_STATUSES`/`SuggestionStatus`, `DISCORD_SNOWFLAKE_RE`, `UUID_RE`, `YOUTUBE_CHANNEL_ID_RE`; subpath `@dragonbot/db/contracts`
+- `logger.ts` — `NeonActivityLogger` (Drizzle logger shared by both clients; not in the barrel)
 - `index.ts` — barrel of all of the above
 
 The package ships TypeScript source (`exports` point at `src/*.ts`; web uses `transpilePackages`). `drizzle.config.ts` loads the repo-root `.env`. No `drizzle/` migrations directory is committed.
@@ -307,7 +310,7 @@ A rejection elsewhere in `clientReady` reaches the `unhandledRejection` handler,
 Started on `BOT_WEBHOOK_PORT` (default 3001) only when `BOT_WEBHOOK_SECRET` is set. Without it, dashboard changes reach the bot only at the next 4-hour sync or `/admin reload`.
 
 - `GET /health` — unauthenticated, `{status:"ok"}`.
-- `POST /webhook/reload[?guildId=]` — `Authorization: Bearer <secret>` (timing-safe). With a valid snowflake: `invalidateCache` + `getSettings` for that guild; without: `hydrateAll()`. Then always a **full** `scheduler.reload()`, then (not awaited) `honeypotWarning.sync(guildId, {resetBudget:true})` or `syncAll()`.
+- `POST /webhook/reload[?guildId=][&scope=settings]` — `Authorization: Bearer <secret>` (timing-safe). `scope=settings` skips the scheduler reload; no caller sends it yet (`notifyBotReload(guildId, scope?)`). With a valid snowflake: `invalidateCache` + `getSettings` for that guild; without: `hydrateAll()`. Then a **full** `scheduler.reload()` (skipped only for `scope=settings`), then (not awaited) `honeypotWarning.sync(guildId, {resetBudget:true})` or `syncAll()`.
 - `POST /webhook/reload` errors: 400 `{error:"Invalid guildId format"}` when `guildId` is present but fails `/^[0-9]{17,20}$/`; 500 `{error:"Internal error"}` if the reload throws. Success is 200 `{success:true}`.
 - The Bearer check runs before method/path routing: any request other than `GET /health` without a valid secret gets 401 `{error:"Unauthorized"}`, even for unknown paths. Only an authenticated request to an unknown route gets 404.
 
@@ -317,7 +320,7 @@ The bot is a single process and holds state in memory: guild settings (GuildServ
 
 ## Database
 
-PostgreSQL on Neon. Schema defined in `packages/db/src/schema.ts`. The bot imports `@dragonbot/db`; the web imports `@dragonbot/db` for schema and helpers and `@dragonbot/db/serverless` for its client.
+PostgreSQL on Neon. Schema defined in `packages/db/src/schema.ts`. The bot imports `@dragonbot/db`; the web imports only subpaths (`@dragonbot/db/schema`, `/permissions`, `/honeypot`, `/contracts`, and `/serverless` for its client), so it never loads the postgres-js client.
 
 ### Tables
 
@@ -329,7 +332,7 @@ PostgreSQL on Neon. Schema defined in `packages/db/src/schema.ts`. The bot impor
 | `scheduled_messages` | `channel_id`, `message`, `cron_expression`, `timezone` (default America/New_York), `is_enabled`, `is_embed`, `embed_color`, `embed_title`, `last_run_at`, `next_run_at`, `created_by` |
 | `verifications` | Pending codes: `discord_id`, `guild_id`, `email`, `code` (6 hex chars), `expires_at` (30 min) |
 | `suggestions` | `discord_id`, `discord_username`, `suggestion`, `status` (free text: `pending`, `approved`, `rejected`, `completed`, `archived`) |
-| `sync_flags` | Legacy key/value dirty flags; only writer is the unused `lib/sync.ts` |
+| `sync_flags` | Legacy and unused: nothing reads or writes it (`lib/sync.ts` was removed); kept in the schema so `db:push` does not drop the table |
 | `auth_tokens` | One-time login tokens: `token` (64 hex, unique), `command_interaction_id`, `used`, `expires_at` (5 min) |
 | `user_xp` | `total_xp`, `level`, `message_count`, `xp_message_count`, `last_message_at`. Unique `(guild_id, discord_id)`; index `(guild_id, total_xp)` |
 | `xp_archives` | `archived_by`, `reason`, `data` (jsonb snapshot), `user_count`, `total_xp_sum`, `restored_at`. Index on `guild_id` |
@@ -388,7 +391,6 @@ The honeypot fields (`is_honeypot_enabled`, `honeypot_channel_id`, `honeypot_act
 | Bot `/admin` | `managers` scope for managers-*, any scope for view-settings/reload |
 | Bot `/xp-admin` | `xp` scope (Administrator for reset-all/restore) |
 | Bot `/schedule`, `/mod` | Discord default member permissions only |
-| `SUBCOMMAND_SCOPE_MAP` | Not used anywhere |
 
 ## Environment Variables
 

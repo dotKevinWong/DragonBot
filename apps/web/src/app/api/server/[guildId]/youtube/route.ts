@@ -1,14 +1,12 @@
 import { NextResponse } from "next/server";
+import { requireGuildAccess, FEATURE_ROUTE_BODIES, invalidDataResponse } from "@/lib/route-guard";
 import { eq, asc } from "drizzle-orm";
-import { youtubeSubscriptions } from "@dragonbot/db";
+import { youtubeSubscriptions } from "@dragonbot/db/schema";
+import { YOUTUBE_CHANNEL_ID_RE } from "@dragonbot/db/contracts";
 import { db } from "@/lib/db";
-import { getAuthenticatedUser } from "@/lib/auth";
-import { checkGuildPermission } from "@/lib/discord";
 import { z } from "zod";
 import { notifyBotReload } from "@/lib/bot-webhook";
 import { DISCORD_SNOWFLAKE_RE } from "@/lib/validators";
-
-const YOUTUBE_CHANNEL_ID_RE = /^UC[\w-]{22}$/;
 
 const createSchema = z.object({
   youtubeChannelId: z.string().regex(YOUTUBE_CHANNEL_ID_RE, "Invalid YouTube channel ID (must start with UC)"),
@@ -21,21 +19,9 @@ export async function GET(
   request: Request,
   { params }: { params: Promise<{ guildId: string }> },
 ) {
-  const discordId = await getAuthenticatedUser(request);
-  if (!discordId) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
-  const { guildId } = await params;
-
-  if (!DISCORD_SNOWFLAKE_RE.test(guildId)) {
-    return NextResponse.json({ error: "Not found", code: "NOT_FOUND" }, { status: 404 });
-  }
-
-  const hasPermission = await checkGuildPermission(guildId, discordId);
-  if (!hasPermission) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-  }
+  const access = await requireGuildAccess(request, params, { bodies: FEATURE_ROUTE_BODIES });
+  if (!access.ok) return access.response;
+  const { guildId } = access.params;
 
   const rows = await db
     .select()
@@ -50,29 +36,14 @@ export async function POST(
   request: Request,
   { params }: { params: Promise<{ guildId: string }> },
 ) {
-  const discordId = await getAuthenticatedUser(request);
-  if (!discordId) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
-  const { guildId } = await params;
-
-  if (!DISCORD_SNOWFLAKE_RE.test(guildId)) {
-    return NextResponse.json({ error: "Not found", code: "NOT_FOUND" }, { status: 404 });
-  }
-
-  const hasPermission = await checkGuildPermission(guildId, discordId, "youtube");
-  if (!hasPermission) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-  }
+  const access = await requireGuildAccess(request, params, { bodies: FEATURE_ROUTE_BODIES, scope: "youtube" });
+  if (!access.ok) return access.response;
+  const { guildId } = access.params;
 
   const body = await request.json();
   const parsed = createSchema.safeParse(body);
   if (!parsed.success) {
-    return NextResponse.json(
-      { error: "Invalid data", ...(process.env.NODE_ENV !== "production" && { details: parsed.error.issues }) },
-      { status: 400 },
-    );
+    return invalidDataResponse(parsed.error.issues, { withCode: false });
   }
 
   try {

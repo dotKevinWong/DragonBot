@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
-import { eq, desc } from "drizzle-orm";
-import { userXp, guilds } from "@dragonbot/db";
+import { eq } from "drizzle-orm";
+import { guilds } from "@dragonbot/db/schema";
 import { db } from "@/lib/db";
-import { resolveDiscordUsers } from "@/lib/discord";
+import { getLeaderboardEntries } from "@/lib/leaderboard";
 import { DISCORD_SNOWFLAKE_RE } from "@/lib/validators";
 
 export async function GET(
@@ -25,28 +25,7 @@ export async function GET(
     return NextResponse.json({ error: "Guild not found" }, { status: 404 });
   }
 
-  const entries = await db
-    .select({
-      discordId: userXp.discordId,
-      totalXp: userXp.totalXp,
-      level: userXp.level,
-      messageCount: userXp.messageCount,
-      xpMessageCount: userXp.xpMessageCount,
-    })
-    .from(userXp)
-    .where(eq(userXp.guildId, guildId))
-    .orderBy(desc(userXp.totalXp))
-    .limit(100);
-
-  const userMap = await resolveDiscordUsers(entries.map((e) => e.discordId));
-  const withUsers = entries.map((entry) => {
-    const user = userMap.get(entry.discordId);
-    return {
-      ...entry,
-      displayName: user?.displayName ?? entry.discordId,
-      avatarUrl: user?.avatarUrl ?? null,
-    };
-  });
+  const withUsers = await getLeaderboardEntries(guildId);
 
   return NextResponse.json({
     guildName: guildRows[0]!.guildName,

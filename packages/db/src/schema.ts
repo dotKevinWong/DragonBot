@@ -149,6 +149,7 @@ export const suggestions = pgTable("suggestions", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
   index("suggestions_guild_idx").on(table.guildId),
+  index("suggestions_guild_created_idx").on(table.guildId, table.createdAt),
 ]);
 
 export const guildAdmins = pgTable("guild_admins", {
@@ -161,6 +162,7 @@ export const guildAdmins = pgTable("guild_admins", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),
 }, (table) => [
   unique("guild_admins_guild_id_discord_id_unique").on(table.guildId, table.discordId),
+  index("guild_admins_discord_idx").on(table.discordId),
 ]);
 
 export const scheduledMessages = pgTable("scheduled_messages", {
@@ -179,8 +181,15 @@ export const scheduledMessages = pgTable("scheduled_messages", {
   createdBy: varchar("created_by", { length: 20 }).notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),
-});
+}, (table) => [
+  index("scheduled_messages_guild_idx").on(table.guildId),
+]);
 
+/**
+ * Legacy and unused: nothing in this repo reads or writes sync_flags any more (the bot's
+ * caches are now invalidated through its webhook server). Kept so `db:push` does not drop
+ * the production table; removing it is a separate schema change that needs approval.
+ */
 export const syncFlags = pgTable("sync_flags", {
   id: uuid("id").primaryKey().defaultRandom(),
   key: text("key").notNull().unique(),
@@ -198,6 +207,7 @@ export const authTokens = pgTable("auth_tokens", {
   expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
 }, (table) => [
   index("auth_tokens_token_idx").on(table.token),
+  index("auth_tokens_expires_idx").on(table.expiresAt),
 ]);
 
 export const userXp = pgTable("user_xp", {
