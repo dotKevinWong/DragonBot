@@ -2,6 +2,51 @@
 
 The audit covered duplicated logic, dead code, performance bottlenecks and overly complex modules. It is read-only: no source code changed. Every change below waits for Kevin's approval.
 
+## Status, 4 November 2026
+
+Kevin approved everything. The work landed in five commits on `claude/codebase-audit-architecture-7b9bc5`:
+
+| Commit | What |
+|---|---|
+| `43bc0b2` | vitest runner for `apps/web` |
+| `646aa3a` | Defects B1 to B7 fixed, each with tests |
+| `ef533f0` | Web API, permissions and db package refactors: D1, D3, D4, D6, D7, D8, D10, P1, P3, P6, P13, P14, P15, P16 (plumbing only), P17, X7, X8, X10 |
+| `d09dc0c` | Bot refactors: D2, D5, D9, D11, D12, D13, C1, C2, C4, P7, P8, P11, P12, X2 to X6 |
+| `7415cd3` | Dashboard UI: C3, D4, D6, D14, D15, D16, P2, X9, plus the B1 follow-up that hides write controls a manager lacks the scope for |
+
+Each refactor began with characterization tests that passed on the old code. Each step had two reviewers, one of whom diffed every changed path against the previous commit. Bot tests went from 241 to 612, and web tests from none to 1196. `tsc` passes in all three packages, and `next build` succeeds.
+
+**Accepted, intended behaviour changes beyond B1 to B7:**
+- **Sidebar (P2):** the guild list and user info load once per dashboard visit, not on every click.
+- **Dashboard permissions (B1 follow-up):**
+  - The settings GET returns `viewerScopes`.
+  - The schedules and suggestions pages make one extra GET for it.
+  - Write controls show briefly before the scopes load.
+- **Under Discord failures (P1, P6):**
+  - `/api/guilds` runs up to 4 checks at once.
+  - It reuses a guild or member it already fetched in the same request. A 429 on the repeat lookup no longer drops that guild or its icon.
+- **Logging and caching (P7, P8, P11):**
+  - `message-update` checks `shouldLog` before fetching. In a database outage, an update with no content change now logs a handler error.
+  - Concurrent misses for the same guild share one database read.
+  - The birthday query result is reused within a single check run.
+- **Startup order (B3):** the webhook server and timer start before the birthday and YouTube startup checks.
+
+**Not done, waiting on Kevin:**
+- **Database (P14, X7):**
+  - Run `pnpm --filter @dragonbot/db db:push` (or `db:generate`) to create the 4 new indexes.
+  - Dropping the redundant `auth_tokens_token_idx` and `suggestions_guild_idx`, and the unused `sync_flags` table, would change production data, so they were left in place.
+- **Unchanged by choice:**
+  - P5: XP still persists every 4 hours.
+  - P8: no negative caching of missing guilds.
+  - P10: the two hydrates stay sequential, with no try/catch around the startup checks.
+  - P16: the settings save does not yet send `scope=settings`.
+  - X10: the Bearer-token fallback is kept.
+- **Policy gaps found and kept as they are:**
+  - `/admin managers-update` can downgrade a `*` manager, and callers can edit their own entry.
+  - `XpService.flush()` silently skips during a concurrent flush, so reset-all and restore flushes can be no-ops.
+- **Cleanup:** the `legacy-*.ts` copies of the old code in `apps/web/tests` only prove the refactor was equivalent. Delete them once you trust it.
+- **Manual check:** the dashboard was not tried in a browser, because no login session, database or Discord tokens were available.
+
 ## How it was done
 
 - Seven readers mapped the architecture, one per area: bot core, commands, services and repositories, lib and utils, web server, web UI, and the db package with the infrastructure.
