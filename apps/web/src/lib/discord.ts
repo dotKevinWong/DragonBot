@@ -274,7 +274,7 @@ export async function getUserGuildPermissions(
   }
 }
 
-type ResolvedDiscordUser = { username: string; displayName: string; avatarUrl: string | null };
+export type ResolvedDiscordUser = { username: string; displayName: string; avatarUrl: string | null };
 
 /** Simple in-memory cache for Discord user lookups (10 min TTL, prevents N+1 API abuse). */
 const userCache = new Map<string, { data: ResolvedDiscordUser | null; expiresAt: number }>();
@@ -374,4 +374,33 @@ export async function isGuildMember(guildId: string, userId: string, memo?: Disc
   } catch {
     return false;
   }
+}
+
+/**
+ * Like resolveDiscordUsers, but returns after at most `budgetMs` with whatever resolved by then.
+ * Lookups still running carry on in the background and fill the in-memory cache. Ids are tried in input order.
+ */
+export async function resolveDiscordUsersWithin(
+  userIds: string[],
+  budgetMs: number,
+  concurrency = 5,
+): Promise<Map<string, ResolvedDiscordUser>> {
+  const results = new Map<string, ResolvedDiscordUser>();
+  if (userIds.length === 0) return results;
+  let stopped = false;
+  const work = mapWithConcurrency(userIds, concurrency, async (id) => {
+    if (stopped) return null;
+    const user = await resolveDiscordUser(id);
+    if (user && !stopped) results.set(id, user);
+    return user;
+  });
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  await Promise.race([
+    work.then(() => undefined, () => undefined),
+    new Promise<void>((resolve) => { timer = setTimeout(resolve, budgetMs); }),
+  ]);
+  clearTimeout(timer);
+  stopped = true;
+  // Keep the order of the ids, as resolveDiscordUsers does
+  return new Map(userIds.filter((id) => results.has(id)).map((id) => [id, results.get(id)!]));
 }

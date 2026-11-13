@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import Link from "next/link";
 import type { LeaderboardEntry } from "@/lib/leaderboard";
 import { LeaderboardTable } from "@/components/leaderboard-table";
+import { LEADERBOARD_PAGE_SIZE, LeaderboardPager, leaderboardPageQuery, splitLeaderboardPage } from "@/components/leaderboard-pager";
 import { redirectIfUnauthorized } from "@/lib/client-fetch";
 
 export default function LeaderboardPage() {
@@ -14,19 +15,31 @@ export default function LeaderboardPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
+  const [page, setPage] = useState(0);
+  const [hasMore, setHasMore] = useState(false);
+  const [pageLoading, setPageLoading] = useState(false);
 
   useEffect(() => {
-    fetch(`/api/server/${guildId}/leaderboard`, { credentials: "same-origin" })
+    let cancelled = false;
+    setPageLoading(true);
+    fetch(`/api/server/${guildId}/leaderboard?${leaderboardPageQuery(page)}`, { credentials: "same-origin" })
       .then(async (res) => {
+        if (cancelled) return;
         if (redirectIfUnauthorized(res)) return;
         if (res.status === 403) { setError("You don't have permission to view this server."); setLoading(false); return; }
         if (!res.ok) { setError("Failed to load leaderboard."); setLoading(false); return; }
-        const data = await res.json();
-        setEntries(data);
+        const { rows, hasMore: more } = splitLeaderboardPage<LeaderboardEntry>(await res.json());
+        if (cancelled) return;
+        setEntries(rows);
+        setHasMore(more);
         setLoading(false);
+        setPageLoading(false);
       })
-      .catch(() => { setError("Failed to load leaderboard."); setLoading(false); });
+      .catch(() => { if (!cancelled) { setError("Failed to load leaderboard."); setLoading(false); } });
+    return () => { cancelled = true; };
+  }, [guildId, page]);
 
+  useEffect(() => {
     // Check if user has admin access (to show/hide settings link)
     fetch(`/api/server/${guildId}`, { credentials: "same-origin" })
       .then((res) => { if (res.ok) setIsAdmin(true); })
@@ -64,7 +77,10 @@ export default function LeaderboardPage() {
           <p className="text-dc-text-muted">No XP data yet. XP is earned by sending messages in the server.</p>
         </div>
       ) : (
-        <LeaderboardTable entries={entries} />
+        <div className={pageLoading ? "opacity-60 transition-opacity" : "transition-opacity"}>
+          <LeaderboardTable entries={entries} startRank={page * LEADERBOARD_PAGE_SIZE + 1} />
+          <LeaderboardPager page={page} hasMore={hasMore} loading={pageLoading} onChange={setPage} />
+        </div>
       )}
 
       <p className="text-xs text-dc-text-muted mt-4">

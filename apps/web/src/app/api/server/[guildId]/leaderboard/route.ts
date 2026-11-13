@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { getAuthenticatedUser } from "@/lib/auth";
 import { isGuildMember } from "@/lib/discord";
 import { getLeaderboardEntries } from "@/lib/leaderboard";
-import { DISCORD_SNOWFLAKE_RE } from "@/lib/validators";
+import { DISCORD_SNOWFLAKE_RE, parseLeaderboardPage } from "@/lib/validators";
 
 export async function GET(
   request: Request,
@@ -19,13 +19,18 @@ export async function GET(
     return NextResponse.json({ error: "Not found", code: "NOT_FOUND" }, { status: 404 });
   }
 
+  const page = parseLeaderboardPage(request.url);
+  if (!page) {
+    return NextResponse.json({ error: "Invalid data", code: "VALIDATION_ERROR" }, { status: 400 });
+  }
+
   // Any guild member can view the leaderboard (not just admins)
   const isMember = await isGuildMember(guildId, discordId);
   if (!isMember) {
     return NextResponse.json({ error: "Forbidden", code: "FORBIDDEN" }, { status: 403 });
   }
 
-  const withUsers = await getLeaderboardEntries(guildId);
+  const withUsers = await getLeaderboardEntries(guildId, page);
 
   return NextResponse.json(withUsers);
 }

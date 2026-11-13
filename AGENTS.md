@@ -347,6 +347,7 @@ PostgreSQL on Neon. Schema defined in `packages/db/src/schema.ts`. The bot impor
 | `auth_tokens` | One-time login tokens: `token` (64 hex, unique), `command_interaction_id`, `used`, `expires_at` (5 min) |
 | `user_xp` | `total_xp`, `level`, `message_count`, `xp_message_count`, `last_message_at`. Unique `(guild_id, discord_id)`; index `(guild_id, total_xp)` |
 | `xp_archives` | `archived_by`, `reason`, `data` (jsonb snapshot), `user_count`, `total_xp_sum`, `restored_at`. Index on `guild_id` |
+| `discord_user_cache` | Web-only: Discord `username`, `display_name`, `avatar_url` per `discord_id` (unique), `updated_at`; read by the leaderboards, refreshed after a day |
 | `youtube_subscriptions` | `youtube_channel_id`, `youtube_channel_name`, `notify_channel_id`, `custom_message`, `last_video_id`, `is_enabled`. Unique `(guild_id, youtube_channel_id)` |
 
 ### Key Patterns
@@ -467,7 +468,7 @@ All `[guildId]` path params are validated against `/^[0-9]{17,20}$/` before any 
 | `/api/server/[guildId]` | GET | yes | any scope | Guild settings (`toSafeGuild`) plus `viewerScopes`: the caller's grants (`["*"]` for owner, Administrator, Manage Server or a `*` grant), last key |
 | `/api/server/[guildId]` | PATCH | yes | per-field `FIELD_SCOPE_MAP` | `guildSettingsUpdateSchema`, xpMin/xpMax cross-check, `findHoneypotChannelConflict`, `notifyBotReload` |
 | `/api/server/[guildId]/discord` | GET | yes | any scope | Channels and roles from Discord. Shortcut: a `guild_admins` row for this guild with at least one scope skips the Discord check |
-| `/api/server/[guildId]/leaderboard` | GET | yes | guild member | Top 100 from `user_xp`, no pagination |
+| `/api/server/[guildId]/leaderboard` | GET | yes | guild member | `user_xp` by total XP; `?offset=` (default 0) and `?limit=` (1–100, default 100), 400 when invalid |
 | `/api/server/[guildId]/schedules` | GET, POST | yes | GET any scope; POST `schedules` | POST: cron validation, `notifyBotReload` |
 | `/api/server/[guildId]/schedules/[scheduleId]` | PATCH, DELETE | yes | `schedules` | `notifyBotReload` |
 | `/api/server/[guildId]/suggestions` | GET | yes | any scope | List |
@@ -475,7 +476,7 @@ All `[guildId]` path params are validated against `/^[0-9]{17,20}$/` before any 
 | `/api/server/[guildId]/youtube` | GET, POST | yes | GET any scope; POST `youtube` | POST: 409 on duplicate, `notifyBotReload` |
 | `/api/server/[guildId]/youtube/[subscriptionId]` | PATCH, DELETE | yes | `youtube` | `notifyBotReload` |
 | `/api/server/[guildId]/youtube/resolve` | POST | yes | `youtube` | Scrapes youtube.com for channel ID + name |
-| `/api/leaderboard/[guildId]` | GET | **none (public)** | — | Top 100 + guild name |
+| `/api/leaderboard/[guildId]` | GET | **none (public)** | — | Same paging as the member route + guild name |
 
 `notifyBotReload` is fire-and-forget; the bot's 4-hour sync is the fallback.
 
@@ -506,6 +507,7 @@ MEE6-style XP with in-memory caching to minimize DB writes (Neon charges for com
 - **Graceful shutdown:** SIGTERM/SIGINT and crash handlers flush before exit
 - **Archives (backup/restore):** `/xp-admin reset-all` archives current XP state to `xp_archives` (jsonb snapshot) before zeroing (in memory; the DB catches up on flush). `/xp-admin restore <archive_id>` auto-archives current state first (undo is always possible), then restores. `/xp-admin archives` lists the 10 most recent snapshots.
 - **Public leaderboard:** `/api/leaderboard/[guildId]` serves leaderboard data without auth.
+- **Leaderboard names** (`lib/leaderboard.ts`): read from `discord_user_cache` in one query; only missing or day-old names are looked up from Discord (`resolveDiscordUsersWithin`, top ranks first, at most 2.5 s) and stored. A name that can't be resolved falls back to a stale stored one, then to the Discord ID. If the table is missing the leaderboard still works, with live lookups only. Both leaderboard pages show 10 rows per page (`components/leaderboard-pager.tsx`).
 
 ### Honeypot
 

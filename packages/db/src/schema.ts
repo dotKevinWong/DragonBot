@@ -228,6 +228,19 @@ export const userXp = pgTable("user_xp", {
   index("user_xp_leaderboard_idx").on(table.guildId, table.totalXp),
 ]);
 
+/**
+ * Discord names and avatars the web app resolved, so a leaderboard load reads them in one query
+ * instead of calling Discord once per user. Written only by the web app; a row older than a day is refreshed.
+ */
+export const discordUserCache = pgTable("discord_user_cache", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  discordId: varchar("discord_id", { length: 20 }).notNull().unique(),
+  username: text("username").notNull(),
+  displayName: text("display_name").notNull(),
+  avatarUrl: text("avatar_url"),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
 export const youtubeSubscriptions = pgTable("youtube_subscriptions", {
   id: uuid("id").primaryKey().defaultRandom(),
   guildId: varchar("guild_id", { length: 20 }).notNull(),

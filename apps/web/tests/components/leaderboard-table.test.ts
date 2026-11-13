@@ -60,3 +60,22 @@ describe("leaderboard table markup", () => {
     expect(html.match(/bg-dc-bg-tertiary\/30/g)).toHaveLength(3);
   });
 });
+
+describe("leaderboard paging", () => {
+  it("numbers a later page from startRank, with no medals or highlight", () => {
+    const html = renderToStaticMarkup(createElement(LeaderboardTable, { entries: [entry(0), entry(1)], startRank: 11 }));
+    expect(html).toContain('<span class="text-dc-text-muted">11</span>');
+    expect(html).toContain('<span class="text-dc-text-muted">12</span>');
+    expect(html).not.toContain("🥇");
+    expect(html).not.toContain("bg-dc-bg-tertiary/30");
+  });
+
+  it("asks for one row more than a page and splits it off", async () => {
+    const { leaderboardPageQuery, splitLeaderboardPage, LEADERBOARD_PAGE_SIZE } = await import("@/components/leaderboard-pager");
+    expect(LEADERBOARD_PAGE_SIZE).toBe(10);
+    expect(leaderboardPageQuery(0)).toBe("offset=0&limit=11");
+    expect(leaderboardPageQuery(2)).toBe("offset=20&limit=11");
+    expect(splitLeaderboardPage(Array.from({ length: 11 }, (_, i) => i))).toEqual({ rows: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9], hasMore: true });
+    expect(splitLeaderboardPage([1, 2])).toEqual({ rows: [1, 2], hasMore: false });
+  });
+});

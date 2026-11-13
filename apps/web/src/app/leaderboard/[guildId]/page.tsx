@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import Image from "next/image";
 import type { LeaderboardEntry } from "@/lib/leaderboard";
 import { LeaderboardTable } from "@/components/leaderboard-table";
+import { LEADERBOARD_PAGE_SIZE, LeaderboardPager, leaderboardPageQuery, splitLeaderboardPage } from "@/components/leaderboard-pager";
 
 export default function PublicLeaderboardPage() {
   const params = useParams();
@@ -13,19 +14,30 @@ export default function PublicLeaderboardPage() {
   const [guildName, setGuildName] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [page, setPage] = useState(0);
+  const [hasMore, setHasMore] = useState(false);
+  const [pageLoading, setPageLoading] = useState(false);
 
   useEffect(() => {
-    fetch(`/api/leaderboard/${guildId}`)
+    let cancelled = false;
+    setPageLoading(true);
+    fetch(`/api/leaderboard/${guildId}?${leaderboardPageQuery(page)}`)
       .then(async (res) => {
+        if (cancelled) return;
         if (res.status === 404) { setError("Server not found."); setLoading(false); return; }
         if (!res.ok) { setError("Failed to load leaderboard."); setLoading(false); return; }
         const data = await res.json();
+        if (cancelled) return;
+        const { rows, hasMore: more } = splitLeaderboardPage<LeaderboardEntry>(data.entries);
         setGuildName(data.guildName);
-        setEntries(data.entries);
+        setEntries(rows);
+        setHasMore(more);
         setLoading(false);
+        setPageLoading(false);
       })
-      .catch(() => { setError("Failed to load leaderboard."); setLoading(false); });
-  }, [guildId]);
+      .catch(() => { if (!cancelled) { setError("Failed to load leaderboard."); setLoading(false); } });
+    return () => { cancelled = true; };
+  }, [guildId, page]);
 
   return (
     <div className="min-h-screen bg-dc-bg-primary text-dc-text-primary">
@@ -54,7 +66,10 @@ export default function PublicLeaderboardPage() {
         )}
 
         {!loading && !error && entries.length > 0 && (
-          <LeaderboardTable entries={entries} />
+          <div className={pageLoading ? "opacity-60 transition-opacity" : "transition-opacity"}>
+            <LeaderboardTable entries={entries} startRank={page * LEADERBOARD_PAGE_SIZE + 1} />
+            <LeaderboardPager page={page} hasMore={hasMore} loading={pageLoading} onChange={setPage} />
+          </div>
         )}
 
         <p className="text-xs text-dc-text-muted mt-4 text-center">

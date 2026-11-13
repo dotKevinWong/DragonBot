@@ -3,16 +3,21 @@ import { eq } from "drizzle-orm";
 import { guilds } from "@dragonbot/db/schema";
 import { db } from "@/lib/db";
 import { getLeaderboardEntries } from "@/lib/leaderboard";
-import { DISCORD_SNOWFLAKE_RE } from "@/lib/validators";
+import { DISCORD_SNOWFLAKE_RE, parseLeaderboardPage } from "@/lib/validators";
 
 export async function GET(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ guildId: string }> },
 ) {
   const { guildId } = await params;
 
   if (!DISCORD_SNOWFLAKE_RE.test(guildId)) {
     return NextResponse.json({ error: "Guild not found" }, { status: 404 });
+  }
+
+  const page = parseLeaderboardPage(request.url);
+  if (!page) {
+    return NextResponse.json({ error: "Invalid data" }, { status: 400 });
   }
 
   const guildRows = await db
@@ -25,7 +30,7 @@ export async function GET(
     return NextResponse.json({ error: "Guild not found" }, { status: 404 });
   }
 
-  const withUsers = await getLeaderboardEntries(guildId);
+  const withUsers = await getLeaderboardEntries(guildId, page);
 
   return NextResponse.json({
     guildName: guildRows[0]!.guildName,

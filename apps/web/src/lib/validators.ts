@@ -160,3 +160,21 @@ export const guildSettingsUpdateSchema = z.object({
   }
   return true;
 }, { message: "xpMin cannot be greater than xpMax", path: ["xpMin"] });
+
+/** Leaderboard paging query (?offset=&limit=). Without either, the first 100 rows, as before paging existed. */
+export const leaderboardPageSchema = z.object({
+  offset: z.coerce.number().int().min(0).max(100_000).default(0),
+  limit: z.coerce.number().int().min(1).max(100).default(100),
+});
+
+export type LeaderboardPage = z.infer<typeof leaderboardPageSchema>;
+
+/** Reads the paging query from a request URL; null when a value is present but invalid. */
+export function parseLeaderboardPage(url: string): LeaderboardPage | null {
+  const q = new URL(url).searchParams;
+  const parsed = leaderboardPageSchema.safeParse({
+    offset: q.get("offset") ?? undefined,
+    limit: q.get("limit") ?? undefined,
+  });
+  return parsed.success ? parsed.data : null;
+}

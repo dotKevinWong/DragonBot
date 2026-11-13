@@ -5,7 +5,8 @@
 // server-only query in lib/leaderboard.ts never reaches the browser bundle.
 import type { LeaderboardEntry } from "@/lib/leaderboard";
 
-export function LeaderboardTable({ entries }: { entries: LeaderboardEntry[] }) {
+/** `startRank` is the rank of the first entry (for later pages); medals and highlighting go to ranks 1 to 3. */
+export function LeaderboardTable({ entries, startRank = 1 }: { entries: LeaderboardEntry[]; startRank?: number }) {
   return (
     <div className="bg-dc-bg-secondary border border-dc-border rounded-lg overflow-hidden">
       <table className="w-full">
@@ -20,7 +21,9 @@ export function LeaderboardTable({ entries }: { entries: LeaderboardEntry[] }) {
           </tr>
         </thead>
         <tbody>
-          {entries.map((entry, i) => (
+          {entries.map((entry, idx) => {
+            const i = startRank - 1 + idx;
+            return (
             <tr
               key={entry.discordId}
               className={`border-b border-dc-border last:border-b-0 ${i < 3 ? "bg-dc-bg-tertiary/30" : ""}`}
@@ -51,7 +54,8 @@ export function LeaderboardTable({ entries }: { entries: LeaderboardEntry[] }) {
                 {entry.xpMessageCount.toLocaleString()}
               </td>
             </tr>
-          ))}
+            );
+          })}
         </tbody>
       </table>
     </div>
