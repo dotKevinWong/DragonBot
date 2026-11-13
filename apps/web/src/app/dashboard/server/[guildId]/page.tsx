@@ -4,21 +4,21 @@ import { useEffect, useState, useMemo } from "react";
 import { useParams } from "next/navigation";
 import type { GuildSettings, DiscordChannel, DiscordRole } from "@/lib/guild-settings";
 import { buildSettingsPatch } from "@/lib/settings-patch";
-import { Toggle } from "@/components/settings/toggle";
-import { ChannelSelect } from "@/components/settings/channel-select";
-import { RoleSelect } from "@/components/settings/role-select";
-import { PlaceholderTextarea } from "@/components/settings/placeholder-textarea";
-import { TagInput } from "@/components/settings/tag-input";
-import { MultiSelect } from "@/components/settings/multi-select";
-import { EventPicker } from "@/components/settings/event-picker";
-import { Section } from "@/components/settings/section";
-import { FIELD_LABEL_CLASS, TEXT_INPUT_CLASS, SELECT_CLASS } from "@/lib/form-classes";
 import { redirectIfUnauthorized } from "@/lib/client-fetch";
-import { filterTextChannels } from "@/lib/feature-list";
-import { TIMEZONES } from "@/lib/timezones";
-import { REPEAT_SPAM_MIN_CHANNELS, REPEAT_SPAM_MAX_CHANNELS } from "@dragonbot/db/honeypot";
+import { SELECT_CLASS } from "@/lib/form-classes";
+import { SETTINGS_GROUPS, SETTINGS_PANELS, type SettingsPanelDef } from "@/components/settings/panels";
 
-// --- Main Page ---
+const DEFAULT_PANEL = SETTINGS_PANELS[0]!.id;
+
+function panelFromHash(): string {
+  if (typeof window === "undefined") return DEFAULT_PANEL;
+  const id = window.location.hash.slice(1);
+  return SETTINGS_PANELS.some((p) => p.id === id) ? id : DEFAULT_PANEL;
+}
+
+function fieldChanged(a: GuildSettings, b: GuildSettings, key: keyof GuildSettings): boolean {
+  return JSON.stringify(a[key]) !== JSON.stringify(b[key]);
+}
 
 export default function ServerSettingsPage() {
   const params = useParams();
@@ -32,14 +32,23 @@ export default function ServerSettingsPage() {
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [hasDiscordData, setHasDiscordData] = useState(false);
-  const [showHoneypotChannelHint, setShowHoneypotChannelHint] = useState(false);
-  // Typed text of the repeated-message channel count; null when not being edited
-  const [repeatCountText, setRepeatCountText] = useState<string | null>(null);
+  const [activeId, setActiveId] = useState(DEFAULT_PANEL);
+  const [search, setSearch] = useState("");
+  // Bumped by Reset so the open panel remounts and drops its local UI state
+  const [resetCount, setResetCount] = useState(0);
 
   const isDirty = useMemo(() => {
     if (!settings || !savedSettings) return false;
     return JSON.stringify(settings) !== JSON.stringify(savedSettings);
   }, [settings, savedSettings]);
+
+  // The open panel follows the URL hash, so a panel can be linked and Back works
+  useEffect(() => {
+    setActiveId(panelFromHash());
+    const onHash = () => setActiveId(panelFromHash());
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
 
   useEffect(() => {
     Promise.all([
@@ -67,9 +76,21 @@ export default function ServerSettingsPage() {
       .catch(() => { setError("Failed to load settings."); setLoading(false); });
   }, [guildId]);
 
+  // A success note fades on its own; errors stay until the next action
+  useEffect(() => {
+    if (message?.type !== "success") return;
+    const t = setTimeout(() => setMessage(null), 3000);
+    return () => clearTimeout(t);
+  }, [message]);
+
   function update<K extends keyof GuildSettings>(key: K, value: GuildSettings[K]) {
-    if (!settings) return;
-    setSettings({ ...settings, [key]: value });
+    setSettings((s) => (s ? { ...s, [key]: value } : s));
+  }
+
+  function openPanel(id: string) {
+    setActiveId(id);
+    window.history.replaceState(null, "", `#${id}`);
+    window.scrollTo({ top: 0 });
   }
 
   async function handleSave() {
@@ -79,21 +100,23 @@ export default function ServerSettingsPage() {
 
     const updateFields = buildSettingsPatch(settings, savedSettings, hasDiscordData);
 
-    const res = await fetch(`/api/server/${guildId}`, {
-      method: "PATCH",
-      credentials: "same-origin",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(updateFields),
-    });
-
-    if (res.ok) {
+    try {
+      const res = await fetch(`/api/server/${guildId}`, {
+        method: "PATCH",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(updateFields),
+      });
       const data = await res.json();
-      setSettings(data);
-      setSavedSettings(data);
-      setMessage({ type: "success", text: "Settings saved!" });
-    } else {
-      const data = await res.json();
-      setMessage({ type: "error", text: data.error ?? "Failed to save settings." });
+      if (res.ok) {
+        setSettings(data);
+        setSavedSettings(data);
+        setMessage({ type: "success", text: "Settings saved!" });
+      } else {
+        setMessage({ type: "error", text: data.error ?? "Failed to save settings." });
+      }
+    } catch {
+      setMessage({ type: "error", text: "Failed to save settings." });
     }
     setSaving(false);
   }
@@ -106,318 +129,146 @@ export default function ServerSettingsPage() {
     );
   }
   if (error) return <p className="text-dc-danger">{error}</p>;
-  if (!settings) return <p className="text-dc-text-muted">No settings found.</p>;
+  if (!settings || !savedSettings) return <p className="text-dc-text-muted">No settings found.</p>;
 
-  const messagePlaceholders = [
-    { label: "{member}", value: "{member}" },
-    { label: "{server}", value: "{server}" },
-  ];
+  const active = SETTINGS_PANELS.find((p) => p.id === activeId) ?? SETTINGS_PANELS[0]!;
+  const ActivePanel = active.Component;
+  const isPanelDirty = (p: SettingsPanelDef) => p.fields.some((f) => fieldChanged(settings, savedSettings, f));
 
-  const textChannels = filterTextChannels(channels);
-  // The same filter the honeypot channel picker uses, so the guard accepts only a channel the picker can show
-  const canEnableHoneypot = hasDiscordData && channels.some((c) => c.type === "text" && c.id === settings.honeypotChannelId);
+  const q = search.trim().toLowerCase();
+  const visible = q
+    ? SETTINGS_PANELS.filter((p) => `${p.label} ${p.description} ${p.keywords ?? ""}`.toLowerCase().includes(q))
+    : SETTINGS_PANELS;
 
   return (
-    <div className="max-w-2xl">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
-        <div>
-          <h1 className="text-2xl font-bold">Server Settings</h1>
-          <p className="text-dc-text-muted text-sm mt-0.5">{settings.guildName ?? guildId}</p>
-        </div>
-        <button
-          onClick={handleSave}
-          disabled={saving || !isDirty}
-          className="px-4 py-2 bg-dc-accent hover:bg-dc-accent-hover disabled:opacity-50 text-white text-sm font-medium rounded-md transition-colors cursor-pointer disabled:cursor-not-allowed"
-        >
-          {saving ? "Saving..." : "Save Changes"}
-        </button>
-      </div>
-
-      {message && (
-        <div className={`px-4 py-3 rounded-md mb-6 text-sm ${
-          message.type === "success"
-            ? "bg-dc-success/10 border border-dc-success/30 text-dc-success"
-            : "bg-dc-danger/10 border border-dc-danger/30 text-dc-danger"
-        }`}>
-          {message.text}
-        </div>
-      )}
-
-      <Section title="Verification">
-        <Toggle label="Auto-verify on join" checked={settings.isVerificationSyncEnabled} onChange={(v) => update("isVerificationSyncEnabled", v)} />
-        <RoleSelect label="Verification Role" value={settings.verificationRoleId} onChange={(v) => update("verificationRoleId", v)} roles={roles} />
-      </Section>
-
-      <Section title="Welcome Messages">
-        <Toggle label="Enable channel welcome" checked={settings.isWelcomeEnabled} onChange={(v) => update("isWelcomeEnabled", v)} />
-        <ChannelSelect label="Welcome Channel" value={settings.welcomeChannelId} onChange={(v) => update("welcomeChannelId", v)} channels={channels} filterType="text" />
-        <PlaceholderTextarea
-          label="Welcome Message"
-          value={settings.welcomeMessage ?? ""}
-          onChange={(v) => update("welcomeMessage", v || null)}
-          placeholder="Welcome to {server}, {member}!"
-          placeholders={messagePlaceholders}
-          channels={textChannels}
-        />
-        <div className="border-t border-dc-border pt-3 mt-1">
-          <Toggle label="Enable DM welcome" checked={settings.isDmWelcomeEnabled} onChange={(v) => update("isDmWelcomeEnabled", v)} />
-          <PlaceholderTextarea
-            label="DM Welcome Message"
-            value={settings.dmWelcomeMessage ?? ""}
-            onChange={(v) => update("dmWelcomeMessage", v || null)}
-            placeholder="Welcome! Please introduce yourself."
-            placeholders={messagePlaceholders}
-            channels={textChannels}
-          />
-        </div>
-      </Section>
-
-      <Section title="Audit Logging">
-        <Toggle label="Enable logging" checked={settings.isLoggingEnabled} onChange={(v) => update("isLoggingEnabled", v)} />
-        <ChannelSelect label="Log Channel" value={settings.logChannelId} onChange={(v) => update("logChannelId", v)} channels={channels} filterType="text" />
-        <div>
-          <label className={FIELD_LABEL_CLASS}>Log Events</label>
-          <EventPicker selected={settings.logEvents} onChange={(v) => update("logEvents", v)} />
-        </div>
-      </Section>
-
-      <Section title="Introduction Gate">
-        <Toggle label="Enable intro gate" checked={settings.isIntroGateEnabled} onChange={(v) => update("isIntroGateEnabled", v)} />
-        <ChannelSelect label="Intro Channel" value={settings.introChannelId} onChange={(v) => update("introChannelId", v)} channels={channels} filterType="text" />
-        <RoleSelect label="Intro Role" value={settings.introRoleId} onChange={(v) => update("introRoleId", v)} roles={roles} />
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <div>
-            <label className={FIELD_LABEL_CLASS}>Min Characters</label>
-            <input type="number" className={TEXT_INPUT_CLASS} value={settings.introMinChars} onChange={(e) => update("introMinChars", parseInt(e.target.value) || 0)} min={0} />
-          </div>
-          <div>
-            <label className={FIELD_LABEL_CLASS}>Min Words</label>
-            <input type="number" className={TEXT_INPUT_CLASS} value={settings.introMinWords} onChange={(e) => update("introMinWords", parseInt(e.target.value) || 0)} min={0} />
-          </div>
-        </div>
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          <div>
-            <label className={FIELD_LABEL_CLASS}>
-              Min Substantive Words
-              <span className="ml-1 inline-block cursor-help text-dc-text-secondary/60" title="Words that aren't common filler (hi, hey, the, from, etc.). A real intro should mention names, majors, hobbies. Set to 0 to disable.">&#9432;</span>
-            </label>
-            <input type="number" className={TEXT_INPUT_CLASS} value={settings.introMinSubstantiveWords} onChange={(e) => update("introMinSubstantiveWords", parseInt(e.target.value) || 0)} min={0} max={100} />
-          </div>
-          <div>
-            <label className={FIELD_LABEL_CLASS}>
-              Unique Word Ratio %
-              <span className="ml-1 inline-block cursor-help text-dc-text-secondary/60" title="Minimum percentage of words that must be unique. Catches repetitive spam like 'hi hi hi hi hi'. Set to 0 to disable.">&#9432;</span>
-            </label>
-            <input type="number" className={TEXT_INPUT_CLASS} value={settings.introUniqueWordRatio} onChange={(e) => update("introUniqueWordRatio", parseInt(e.target.value) || 0)} min={0} max={100} />
-          </div>
-          <div>
-            <label className={FIELD_LABEL_CLASS}>
-              Max Repeated Char %
-              <span className="ml-1 inline-block cursor-help text-dc-text-secondary/60" title="Reject if any single character makes up more than this percentage of the message. Catches padding like 'aaaaaaa'. Set to 0 to disable.">&#9432;</span>
-            </label>
-            <input type="number" className={TEXT_INPUT_CLASS} value={settings.introMaxRepeatedCharPct} onChange={(e) => update("introMaxRepeatedCharPct", parseInt(e.target.value) || 0)} min={0} max={100} />
-          </div>
-        </div>
-      </Section>
-
-      <Section title="Moderation">
-        <Toggle label="Cross-guild ban sync" checked={settings.isBanSyncEnabled} onChange={(v) => update("isBanSyncEnabled", v)} />
-        <ChannelSelect label="Mod Notes Channel" value={settings.modNotesChannelId} onChange={(v) => update("modNotesChannelId", v)} channels={channels} filterType="text" />
-      </Section>
-
-      <Section title="Honeypot">
-        <p className="text-xs font-semibold text-dc-text-secondary uppercase tracking-wide">Channel trap</p>
-        <Toggle
-          label="Enable channel trap"
-          checked={settings.isHoneypotEnabled}
-          onChange={(v) => {
-            // Turning it on needs a channel from the loaded list; turning it off always works
-            if (v && !canEnableHoneypot) {
-              setShowHoneypotChannelHint(true);
-              return;
-            }
-            setShowHoneypotChannelHint(false);
-            update("isHoneypotEnabled", v);
-          }}
-        />
-        {showHoneypotChannelHint && !canEnableHoneypot && <p className="text-xs text-dc-danger">Pick a channel first.</p>}
-        <ChannelSelect label="Honeypot Channel" value={settings.honeypotChannelId} onChange={(v) => { setShowHoneypotChannelHint(false); update("honeypotChannelId", v); }} channels={channels} filterType="text" showUnknown />
-        <div>
-          <label className={FIELD_LABEL_CLASS}>Action</label>
-          <select
-            className={SELECT_CLASS}
-            value={settings.honeypotAction}
-            onChange={(e) => update("honeypotAction", e.target.value === "ban" ? "ban" : "kick")}
-          >
-            <option value="ban">Ban: removed for good</option>
-            <option value="kick">Kick: removed, can rejoin</option>
-          </select>
-        </div>
-        <div className="space-y-1 text-xs text-dc-text-muted">
-          <p>Their messages from the last hour are cleaned up across the whole server either way.</p>
-          <p>Verified members only have the message deleted. Staff (Administrator, Manage Server, Kick Members or Ban Members) are ignored.</p>
-          <p>Pick a channel everyone can see and post in but nobody has a reason to use. Test it with an alt account: if you aren&apos;t staff, posting there removes you.</p>
-        </div>
-        <div className="border-t border-dc-border pt-3 mt-1 space-y-3">
-          <p className="text-xs font-semibold text-dc-text-secondary uppercase tracking-wide">Repeated messages</p>
-          <Toggle label="Enable repeated-message check" checked={settings.isRepeatSpamEnabled} onChange={(v) => update("isRepeatSpamEnabled", v)} />
-          <div>
-            <label className={FIELD_LABEL_CLASS}>Kick after the same message in this many channels</label>
-            <input
-              type="number"
-              className={TEXT_INPUT_CLASS}
-              value={repeatCountText ?? String(settings.repeatSpamChannelCount)}
-              onChange={(e) => {
-                setRepeatCountText(e.target.value);
-                // A valid in-range number counts at once, so Save enables while typing and a click on it can't beat the blur
-                const n = Number(e.target.value);
-                if (e.target.value.trim() !== "" && Number.isInteger(n) && n >= REPEAT_SPAM_MIN_CHANNELS && n <= REPEAT_SPAM_MAX_CHANNELS) update("repeatSpamChannelCount", n);
-              }}
-              onBlur={(e) => {
-                const n = parseInt(e.target.value, 10);
-                if (!Number.isNaN(n)) update("repeatSpamChannelCount", Math.min(REPEAT_SPAM_MAX_CHANNELS, Math.max(REPEAT_SPAM_MIN_CHANNELS, n)));
-                setRepeatCountText(null);
-              }}
-              min={REPEAT_SPAM_MIN_CHANNELS}
-              max={REPEAT_SPAM_MAX_CHANNELS}
-            />
-          </div>
-          <div>
-            <label className={FIELD_LABEL_CLASS}>Matching</label>
-            <select
-              className={SELECT_CLASS}
-              value={settings.repeatSpamMatchMode}
-              onChange={(e) => update("repeatSpamMatchMode", e.target.value === "exact" ? "exact" : e.target.value === "similar" ? "similar" : "ignore_case")}
-            >
-              <option value="exact">Word for word, case-sensitive</option>
-              <option value="ignore_case">Word for word, ignoring case</option>
-              <option value="similar">Too similar</option>
+    <div className="flex flex-col lg:flex-row gap-6 lg:gap-10">
+      {/* Panel nav: a sidebar on large screens, a dropdown below that */}
+      <nav aria-label="Settings sections" className="lg:w-52 shrink-0">
+        <div className="lg:sticky lg:top-8">
+          <p className="text-xs text-dc-text-muted truncate mb-2 px-2.5">{settings.guildName ?? guildId}</p>
+          <div className="lg:hidden">
+            <select className={SELECT_CLASS} value={active.id} onChange={(e) => openPanel(e.target.value)} aria-label="Settings section">
+              {SETTINGS_GROUPS.map((g) => (
+                <optgroup key={g} label={g}>
+                  {SETTINGS_PANELS.filter((p) => p.group === g).map((p) => (
+                    <option key={p.id} value={p.id}>{p.label}{isPanelDirty(p) ? " •" : ""}</option>
+                  ))}
+                </optgroup>
+              ))}
             </select>
           </div>
-          <p className="text-xs text-dc-text-muted">Kicks an account that posts the same message in several different channels within a minute, and cleans up its messages from the last hour. Short messages like &quot;gm&quot; never count. Verified members and staff are never affected.</p>
+          <div className="hidden lg:block">
+            <input
+              type="search"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search settings"
+              className="w-full mb-3 px-2.5 py-1.5 bg-dc-input border border-dc-border rounded-md text-sm text-dc-text-primary outline-none placeholder:text-dc-text-muted focus:border-dc-accent"
+            />
+            {SETTINGS_GROUPS.map((g) => {
+              const items = visible.filter((p) => p.group === g);
+              if (items.length === 0) return null;
+              return (
+                <div key={g} className="mb-4">
+                  <p className="px-2.5 mb-1 text-[11px] font-semibold uppercase tracking-wide text-dc-text-muted">{g}</p>
+                  {items.map((p) => {
+                    const selected = p.id === active.id;
+                    return (
+                      <button
+                        key={p.id}
+                        type="button"
+                        onClick={() => openPanel(p.id)}
+                        aria-current={selected ? "page" : undefined}
+                        className={`w-full flex items-center gap-2 px-2.5 py-1.5 mb-0.5 rounded-md text-sm text-left transition-colors cursor-pointer ${
+                          selected ? "bg-dc-bg-modifier text-dc-text-primary" : "text-dc-text-secondary hover:bg-dc-bg-modifier/50 hover:text-dc-text-primary"
+                        }`}
+                      >
+                        <span className="truncate">{p.label}</span>
+                        <span className="ml-auto flex items-center gap-1.5">
+                          {isPanelDirty(p) && <span className="w-1.5 h-1.5 rounded-full bg-dc-warning" title="Unsaved changes" />}
+                          {p.isOn && (
+                            <span
+                              className={`w-2 h-2 rounded-full ${p.isOn(settings) ? "bg-dc-success" : "bg-[#4e5058]"}`}
+                              title={p.isOn(settings) ? "On" : "Off"}
+                            />
+                          )}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              );
+            })}
+            {visible.length === 0 && <p className="px-2.5 text-sm text-dc-text-muted">No matching settings.</p>}
+          </div>
         </div>
-        <div className="border-t border-dc-border pt-3 mt-1 space-y-1 text-xs text-dc-text-muted">
-          <p>Changing these settings needs Manage Server or full dashboard access.</p>
-          <p>Honeypot bans are never copied to other servers by ban sync.</p>
-        </div>
-      </Section>
+      </nav>
 
-      <Section title="Suggestions">
-        <Toggle label="Enable suggestions" checked={settings.isSuggestionsEnabled} onChange={(v) => update("isSuggestionsEnabled", v)} />
-      </Section>
+      <div className="flex-1 min-w-0 max-w-[760px] pb-28">
+        {!hasDiscordData && (
+          <div className="mb-5 flex gap-3 px-4 py-3 rounded-lg border border-dc-warning/30 bg-dc-warning/10 text-sm">
+            <svg viewBox="0 0 24 24" className="w-5 h-5 shrink-0 text-dc-warning" fill="currentColor" aria-hidden>
+              <path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0ZM12 8a1 1 0 0 1 1 1v4a1 1 0 1 1-2 0V9a1 1 0 0 1 1-1Zm0 8.5a1.25 1.25 0 1 1 0 2.5 1.25 1.25 0 0 1 0-2.5Z" />
+            </svg>
+            <div className="text-dc-text-secondary">
+              <p className="font-medium text-dc-text-primary">DragonBot can&apos;t see this server&apos;s channels and roles</p>
+              <p className="mt-0.5">
+                Channel and role names can&apos;t be shown or picked, and channel or role changes won&apos;t be saved. Check that DragonBot is
+                still in the server and has the View Channels permission, then reload.
+              </p>
+            </div>
+          </div>
+        )}
 
-      <Section title="AI / Ask">
-        <Toggle label="Enable /ask command" checked={settings.isAskEnabled} onChange={(v) => update("isAskEnabled", v)} />
-        <div>
-          <label className={FIELD_LABEL_CLASS}>System Prompt</label>
-          <textarea
-            className="w-full px-3 py-2 bg-dc-input border border-dc-border rounded-md text-dc-text-primary text-sm outline-none focus:border-dc-accent transition-colors resize-y min-h-24"
-            value={settings.askSystemPrompt ?? ""}
-            onChange={(e) => update("askSystemPrompt", e.target.value || null)}
-            placeholder="Custom system prompt for the AI..."
-          />
-        </div>
-      </Section>
+        <header className="mb-6">
+          <h1 className="text-xl font-semibold text-dc-text-primary">{active.label}</h1>
+          <p className="text-sm text-dc-text-muted mt-1">{active.description}</p>
+        </header>
 
-      <Section title="Off-Topic">
-        <PlaceholderTextarea
-          label="Response Message"
-          value={settings.offtopicMessage ?? ""}
-          onChange={(v) => update("offtopicMessage", v || null)}
-          placeholder="Off-topic response message..."
-          channels={textChannels}
+        <ActivePanel
+          key={`${active.id}:${resetCount}`}
+          settings={settings}
+          update={update}
+          channels={channels}
+          roles={roles}
+          hasDiscordData={hasDiscordData}
         />
-        <div>
-          <label className={FIELD_LABEL_CLASS}>Image URLs</label>
-          <TagInput values={settings.offtopicImages} onChange={(v) => update("offtopicImages", v)} placeholder="Paste image URL and press Enter" />
-        </div>
-      </Section>
+      </div>
 
-      <Section title="XP / Leveling">
-        <Toggle label="Enable XP system" checked={settings.isXpEnabled} onChange={(v) => update("isXpEnabled", v)} />
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          <div>
-            <label className={FIELD_LABEL_CLASS}>Min XP per Message</label>
-            <input type="number" className={TEXT_INPUT_CLASS} value={settings.xpMin} onChange={(e) => update("xpMin", parseInt(e.target.value) || 1)} min={1} max={1000} />
-          </div>
-          <div>
-            <label className={FIELD_LABEL_CLASS}>Max XP per Message</label>
-            <input type="number" className={TEXT_INPUT_CLASS} value={settings.xpMax} onChange={(e) => update("xpMax", parseInt(e.target.value) || 1)} min={1} max={1000} />
-          </div>
-          <div>
-            <label className={FIELD_LABEL_CLASS}>Cooldown (seconds)</label>
-            <input type="number" className={TEXT_INPUT_CLASS} value={settings.xpCooldownSeconds} onChange={(e) => update("xpCooldownSeconds", parseInt(e.target.value) || 0)} min={0} max={3600} />
-          </div>
-        </div>
-        <ChannelSelect label="Level-up Announcement Channel" value={settings.xpLevelupChannelId} onChange={(v) => update("xpLevelupChannelId", v)} channels={channels} filterType="text" />
-        <div>
-          <label className={FIELD_LABEL_CLASS}>Excluded Channels (no XP earned)</label>
-          <MultiSelect
-            items={filterTextChannels(channels).map((c) => ({ id: c.id, label: `# ${c.name}` }))}
-            selected={settings.xpExcludedChannelIds}
-            onChange={(v) => update("xpExcludedChannelIds", v)}
-          />
-        </div>
-        <div>
-          <label className={FIELD_LABEL_CLASS}>Excluded Roles (no XP earned)</label>
-          <MultiSelect
-            items={roles.map((r) => ({ id: r.id, label: `@ ${r.name}` }))}
-            selected={settings.xpExcludedRoleIds}
-            onChange={(v) => update("xpExcludedRoleIds", v)}
-          />
-        </div>
-      </Section>
-
-      <Section title="Birthdays">
-        <Toggle label="Enable birthday announcements" checked={settings.isBirthdayEnabled} onChange={(v) => update("isBirthdayEnabled", v)} />
-        <ChannelSelect label="Birthday Announcement Channel" value={settings.birthdayChannelId} onChange={(v) => update("birthdayChannelId", v)} channels={channels} filterType="text" />
-        <RoleSelect label="Birthday Role (assigned for the day)" value={settings.birthdayRoleId} onChange={(v) => update("birthdayRoleId", v)} roles={roles} />
-        <div>
-          <label className={FIELD_LABEL_CLASS}>Custom Message (optional)</label>
-          <textarea
-            className="w-full px-3 py-2 bg-dc-input border border-dc-border rounded-md text-dc-text-primary text-sm outline-none focus:border-dc-accent resize-y min-h-16 transition-colors"
-            value={settings.birthdayMessage ?? ""}
-            onChange={(e) => update("birthdayMessage", e.target.value || null)}
-            placeholder="Happy {age} birthday {user}! 🎂🎉"
-          />
-          <p className="text-xs text-dc-text-muted mt-1">Use <code className="text-dc-accent">{"{user}"}</code> for the mention and <code className="text-dc-accent">{"{age}"}</code> for the ordinal age (e.g. 27th). Leave blank for default.</p>
-        </div>
-        <div>
-          <label className={FIELD_LABEL_CLASS}>Timezone</label>
-          <select
-            className="w-full px-3 py-2 bg-dc-input border border-dc-border rounded-md text-dc-text-primary text-sm outline-none focus:border-dc-accent cursor-pointer transition-colors"
-            value={settings.birthdayTimezone}
-            onChange={(e) => update("birthdayTimezone", e.target.value)}
+      {/* Discord's unsaved-changes bar */}
+      {(isDirty || message) && (
+        <div className="fixed bottom-4 left-4 right-4 md:left-[calc(312px+2rem)] md:right-8 z-40 flex justify-center pointer-events-none">
+          <div
+            role="status"
+            className={`pointer-events-auto w-full max-w-[760px] flex items-center gap-3 rounded-lg px-4 py-2.5 shadow-2xl shadow-black/60 ${
+              message?.type === "error" ? "bg-dc-danger" : isDirty ? "bg-[#111214]" : "bg-dc-success"
+            }`}
           >
-            {TIMEZONES.map((tz) => (
-              <option key={tz} value={tz}>{tz}</option>
-            ))}
-          </select>
-          <p className="text-xs text-dc-text-muted mt-1">Birthdays are announced at 9 AM in this timezone.</p>
-        </div>
-      </Section>
-
-      {/* Sticky unsaved changes banner */}
-      {isDirty && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-4 bg-dc-bg-tertiary border border-dc-border rounded-lg px-5 py-3 shadow-xl">
-          <span className="text-sm text-dc-text-primary">Careful — you have unsaved changes!</span>
-          <button
-            type="button"
-            onClick={() => { setSettings(savedSettings); setMessage(null); setShowHoneypotChannelHint(false); }}
-            className="text-sm text-dc-text-secondary hover:text-dc-text-primary transition-colors cursor-pointer"
-          >
-            Reset
-          </button>
-          <button
-            onClick={handleSave}
-            disabled={saving}
-            className="px-4 py-2 bg-dc-success hover:bg-dc-success/80 disabled:opacity-50 text-white text-sm font-medium rounded-md transition-colors cursor-pointer disabled:cursor-not-allowed"
-          >
-            {saving ? "Saving..." : "Save Changes"}
-          </button>
+            <span className="text-sm font-medium text-white flex-1 min-w-0">
+              {message?.type === "error" ? message.text : isDirty ? "Careful — you have unsaved changes!" : message?.text}
+            </span>
+            {isDirty && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => { setSettings(savedSettings); setMessage(null); setResetCount((n) => n + 1); }}
+                  className="text-sm font-medium text-white hover:underline cursor-pointer px-2"
+                >
+                  Reset
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSave}
+                  disabled={saving}
+                  className="px-4 h-8 bg-[#248046] hover:bg-[#1a6334] disabled:opacity-60 text-white text-sm font-medium rounded-md transition-colors cursor-pointer disabled:cursor-not-allowed"
+                >
+                  {saving ? "Saving..." : "Save Changes"}
+                </button>
+              </>
+            )}
+          </div>
         </div>
       )}
-
     </div>
   );
 }

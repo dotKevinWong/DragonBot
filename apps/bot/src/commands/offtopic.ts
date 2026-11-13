@@ -15,7 +15,8 @@ const command: BotCommand = {
     }
 
     const guild = await ctx.services.guild.getSettings(interaction.guildId);
-    const message = guild?.offtopicMessage ?? "This is off-topic!";
+    // The dashboard editor stores line breaks as the two characters \n, as in the welcome messages
+    const message = (guild?.offtopicMessage ?? "This is off-topic!").replace(/\\n/g, "\n");
     const images = guild?.offtopicImages ?? [];
 
     const embed = new EmbedBuilder().setColor(0xffcc00).setDescription(message);

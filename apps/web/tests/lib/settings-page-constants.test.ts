@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { LOG_EVENTS } from "@dragonbot/db/contracts";
-import { FIELD_LABEL_CLASS, SELECT_CLASS, TEXT_INPUT_CLASS } from "@/lib/form-classes";
 
-// Pins the constants the server settings page now shares (audit D4 page part, D16).
+// Pins the constants the server settings page now shares (audit D4 page part). The form class strings
+// were pinned here too until the November 2026 Discord restyle changed them on purpose.
 
 describe("settings page log event options", () => {
   it("LOG_EVENTS has the keys and order of the page's old LOG_EVENT_OPTIONS literal", () => {
@@ -15,14 +15,3 @@ describe("settings page log event options", () => {
   });
 });
 
-describe("form class strings", () => {
-  it("are byte-identical to the written-out strings they replaced", () => {
-    expect(FIELD_LABEL_CLASS).toBe("block text-xs font-semibold text-dc-text-secondary uppercase tracking-wide mb-1.5");
-    expect(TEXT_INPUT_CLASS).toBe(
-      "w-full px-3 py-2 bg-dc-input border border-dc-border rounded-md text-dc-text-primary text-sm outline-none focus:border-dc-accent transition-colors",
-    );
-    expect(SELECT_CLASS).toBe(
-      "w-full px-3 py-2 bg-dc-input border border-dc-border rounded-md text-dc-text-primary text-sm outline-none focus:border-dc-accent transition-colors cursor-pointer",
-    );
-  });
-});

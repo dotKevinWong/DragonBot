@@ -1,13 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import { createElement, type ComponentType, type ReactNode } from "react";
+import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-// Audit P2. The sidebar's plain <a href> links became next/link <Link>s with the same hrefs,
-// classNames and children. Rendered with the same state and pathname, the layout must produce the
-// same HTML as the pre-P2 copy (only the order of each link's class and href attributes differs),
-// so active-link highlighting, the guild rows and the sub-links are unchanged. Effects do not run in renderToStaticMarkup, so the state is seeded through useState.
+// The dashboard shell: a Discord-style server rail and a sidebar with the open server's pages.
+// Effects do not run in renderToStaticMarkup, so the layout's state is seeded through useState.
 
 const seed = vi.hoisted(() => ({ pathname: "/dashboard", values: [] as unknown[] }));
 
@@ -16,83 +14,82 @@ vi.mock("react", async (importOriginal) => {
   const actual = await importOriginal<typeof import("react")>();
   return {
     ...actual,
-    // The layout's four useState calls, in order: guilds, loadingGuilds, user, mobileMenuOpen
+    // The layout's four useState calls come first, in order: guilds, loadingGuilds, user, mobileMenuOpen
     useState: (init: unknown) => (seed.values.length > 0 ? [seed.values.shift(), () => {}] : actual.useState(init)),
   };
 });
 
 import DashboardLayout from "@/app/dashboard/layout";
-import LegacyDashboardLayout from "./legacy-dashboard-layout";
 
 const A = "222222222222222222";
 const B = "333333333333333333";
 
 const GUILDS = [
-  { guildId: A, guildName: "Alpha Server", iconUrl: "https://cdn.discordapp.com/icons/a/x.png?size=64&a=1", isAdmin: true },
+  { guildId: A, guildName: "Alpha Server", iconUrl: "https://cdn.discordapp.com/icons/a/x.png?size=64", isAdmin: true },
   { guildId: B, guildName: null, iconUrl: null, isAdmin: false },
-  { guildId: "444444444444444444", guildName: "the <b> & co", iconUrl: null, isAdmin: true },
 ];
-
 const USER = { discord_id: "1", username: "kev", display_name: "Kevin", avatar_url: "https://cdn.discordapp.com/avatars/1/a.png" };
 
-const PATHS = [
-  "/dashboard",
-  "/dashboard/profile",
-  `/dashboard/server/${A}`,
-  `/dashboard/server/${A}/schedules`,
-  `/dashboard/server/${A}/youtube`,
-  `/dashboard/server/${A}/suggestions`,
-  `/dashboard/server/${A}/leaderboard`,
-  `/dashboard/server/${B}/leaderboard`,
-  `/dashboard/server/${B}`,
-];
-
-type State = [guilds: unknown[], loading: boolean, user: unknown, mobileOpen: boolean];
-
-const STATES: [string, State][] = [
-  ["loading, no user", [[], true, null, false]],
-  ["loaded, no guilds", [[], false, null, false]],
-  ["loaded guilds and user", [GUILDS, false, USER, false]],
-  ["user without avatar, mobile menu open", [GUILDS, false, { ...USER, avatar_url: null, display_name: null }, true]],
-];
-
-/** Puts each <a>'s attributes in name order: <Link> writes class before href, <a> wrote them as given. */
-function sortAnchorAttributes(html: string): string {
-  return html.replace(/<a ([^>]*)>/g, (_m, attrs: string) => {
-    const list = attrs.match(/[\w-]+="[^"]*"/g) ?? [];
-    expect(list.join(" ")).toBe(attrs);
-    return `<a ${[...list].sort().join(" ")}>`;
-  });
-}
-
-function render(Layout: ComponentType<{ children: ReactNode }>, pathname: string, state: State): string {
+function render(pathname: string, state: unknown[] = [GUILDS, false, USER, false]): string {
   seed.pathname = pathname;
   seed.values = [...state];
-  const html = renderToStaticMarkup(createElement(Layout, null, createElement("p", null, "page")));
-  expect(seed.values).toEqual([]);
-  return sortAnchorAttributes(html);
+  return renderToStaticMarkup(createElement(DashboardLayout, null, createElement("p", null, "page")));
 }
 
-describe("dashboard layout sidebar (P2)", () => {
-  for (const [name, state] of STATES) {
-    for (const pathname of PATHS) {
-      it(`${name} at ${pathname}: same HTML as the <a href> sidebar (attribute order aside)`, () => {
-        expect(render(DashboardLayout, pathname, state)).toBe(render(LegacyDashboardLayout, pathname, state));
-      });
-    }
-  }
+/** Every href in the rendered HTML, in order. */
+const hrefs = (html: string) => [...html.matchAll(/href="([^"]+)"/g)].map((m) => m[1]);
 
-  it("highlights the active sub-link from the pathname", () => {
-    const html = render(DashboardLayout, `/dashboard/server/${A}/youtube`, [GUILDS, false, USER, false]);
-    expect(html).toContain(`<a class="block px-3 py-1.5 rounded-md text-sm transition-colors text-dc-text-primary bg-dc-bg-modifier" href="/dashboard/server/${A}/youtube">YouTube</a>`);
-    expect(html).toContain(`<a class="block px-3 py-1.5 rounded-md text-sm transition-colors text-dc-text-muted hover:text-dc-text-secondary hover:bg-dc-bg-modifier/50" href="/dashboard/server/${A}/schedules">Schedules</a>`);
+describe("dashboard layout", () => {
+  it("renders the page content", () => {
+    expect(render("/dashboard/profile")).toContain("<p>page</p>");
   });
 
-  it("navigates with next/link, without prefetching, and has no plain <a> left", () => {
+  it("links each server from the rail: admins to settings, members to the leaderboard", () => {
+    const html = render("/dashboard/profile");
+    expect(html).toMatch(new RegExp(`aria-label="Alpha Server"[^>]*href="/dashboard/server/${A}"`));
+    expect(html).toMatch(new RegExp(`aria-label="${B}"[^>]*href="/dashboard/server/${B}/leaderboard"`));
+  });
+
+  it("shows an admin every page of the open server, and marks the current one", () => {
+    const html = render(`/dashboard/server/${A}/youtube`);
+    for (const slug of ["", "/schedules", "/youtube", "/suggestions", "/leaderboard"]) {
+      expect(hrefs(html)).toContain(`/dashboard/server/${A}${slug}`);
+    }
+    expect(html).toMatch(new RegExp(`aria-current="page"[^>]*href="/dashboard/server/${A}/youtube"`));
+    expect(html).not.toMatch(new RegExp(`aria-current="page"[^>]*href="/dashboard/server/${A}/schedules"`));
+    expect(html).toContain(">Alpha Server</h2>");
+  });
+
+  it("shows a member only the leaderboard", () => {
+    const html = render(`/dashboard/server/${B}/leaderboard`);
+    expect(hrefs(html)).toContain(`/dashboard/server/${B}/leaderboard`);
+    for (const slug of ["/schedules", "/youtube", "/suggestions"]) {
+      expect(hrefs(html)).not.toContain(`/dashboard/server/${B}${slug}`);
+    }
+  });
+
+  it("does not treat a longer guild id with the same prefix as the open server", () => {
+    const html = render(`/dashboard/server/${A}9/leaderboard`);
+    expect(html).not.toContain(">Alpha Server</h2>");
+  });
+
+  it("shows skeletons while servers load and the user's name once known", () => {
+    expect(render("/dashboard/profile", [[], true, null, false])).toContain("animate-pulse");
+    expect(render("/dashboard/profile")).toContain("Kevin");
+  });
+
+  it("opens the mobile drawer with the rail and sidebar", () => {
+    const closed = render("/dashboard/profile");
+    const open = render("/dashboard/profile", [GUILDS, false, USER, true]);
+    expect(open).toContain('aria-label="Close menu"');
+    expect((open.match(/aria-label="Servers"/g) ?? []).length).toBe((closed.match(/aria-label="Servers"/g) ?? []).length + 1);
+  });
+
+  it("navigates with next/link without prefetching, and has no plain <a>", () => {
     const src = readFileSync(fileURLToPath(new URL("../../src/app/dashboard/layout.tsx", import.meta.url)), "utf8");
-    expect(src).toContain('import Link from "next/link";');
-    expect(src.match(/<Link\b/g)).toHaveLength(7);
-    expect(src.match(/prefetch=\{false\}/g)).toHaveLength(7);
+    const links = src.match(/<Link\b/g)?.length ?? 0;
+    expect(links).toBeGreaterThan(0);
+    expect(src.match(/prefetch=\{false\}/g)).toHaveLength(links);
     expect(src).not.toMatch(/<a[\s>]/);
   });
 });

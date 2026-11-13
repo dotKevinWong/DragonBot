@@ -1,18 +1,52 @@
 @import "tailwindcss";
 
+/* Discord's refreshed dark theme (2025): near-black sidebars, a slightly lighter content area,
+   raised surfaces for cards, hairline borders and blurple as the one accent. */
 @theme {
-  --color-dc-bg-primary: #313338;
-  --color-dc-bg-secondary: #2b2d31;
-  --color-dc-bg-tertiary: #1e1f22;
-  --color-dc-bg-modifier: #4e505899;
+  --font-sans: "gg sans", "Noto Sans", "Helvetica Neue", Helvetica, Arial, system-ui, sans-serif;
+
+  --color-dc-bg-primary: #1a1a1e;      /* content area */
+  --color-dc-bg-secondary: #202024;    /* cards and raised surfaces */
+  --color-dc-bg-tertiary: #121214;     /* sidebars, server rail, page background */
+  --color-dc-bg-floating: #28282d;     /* menus, popovers, tooltips */
+  --color-dc-bg-modifier: #ffffff14;   /* selected row; /50 is the hover */
   --color-dc-text-primary: #f2f3f5;
   --color-dc-text-secondary: #b5bac1;
   --color-dc-text-muted: #949ba4;
   --color-dc-accent: #5865f2;
-  --color-dc-accent-hover: #4752c4;
+  --color-dc-accent-hover: #4654c0;
   --color-dc-success: #23a55a;
   --color-dc-danger: #f23f43;
   --color-dc-warning: #f0b232;
-  --color-dc-border: #3f4147;
-  --color-dc-input: #1e1f22;
+  --color-dc-border: #2e2e34;
+  --color-dc-input: #141417;
+  --color-dc-mention: #5865f24d;       /* channel and placeholder pills */
+  --color-dc-mention-text: #c9cdfb;
+}
+
+html {
+  color-scheme: dark;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+::selection {
+  background: #5865f266;
+}
+
+/* Thin scrollbars like Discord's */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #3a3a41 transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background: #3a3a41;
+  border-radius: 8px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
 }

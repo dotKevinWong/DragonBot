@@ -62,18 +62,67 @@ function discordCdnUrl(
 }
 
 /**
+ * Discord allows 30 GET /users/{id} calls per second per bot. The leaderboard asks for up to 100 at once, so
+ * without pacing everyone after the 30th came back 429 and showed as a bare ID. When Discord says the bucket
+ * is empty (x-ratelimit-remaining 0) or answers 429, every user lookup in this instance waits until it refills.
+ */
+const MAX_RATE_LIMIT_WAIT_MS = 5000;
+let usersBucketResetAt = 0;
+
+/** The wait Discord asked for, in ms: the 429 body's retry_after, else the reset-after or Retry-After header. Null if none or too long. */
+async function rateLimitWaitMs(res: Response): Promise<number | null> {
+  let seconds = Number.NaN;
+  try {
+    const body = (await res.clone().json()) as { retry_after?: unknown };
+    if (typeof body.retry_after === "number") seconds = body.retry_after;
+  } catch {
+    // No JSON body: fall back to the headers
+  }
+  if (Number.isNaN(seconds)) seconds = Number(res.headers.get("x-ratelimit-reset-after") ?? res.headers.get("retry-after") ?? Number.NaN);
+  if (!Number.isFinite(seconds) || seconds < 0) return null;
+  const ms = Math.ceil(seconds * 1000);
+  return ms <= MAX_RATE_LIMIT_WAIT_MS ? ms : null;
+}
+
+function noteUsersBucket(res: Response): void {
+  if (res.headers.get("x-ratelimit-remaining") !== "0") return;
+  const seconds = Number(res.headers.get("x-ratelimit-reset-after"));
+  if (Number.isFinite(seconds) && seconds > 0 && seconds * 1000 <= MAX_RATE_LIMIT_WAIT_MS) {
+    usersBucketResetAt = Math.max(usersBucketResetAt, Date.now() + Math.ceil(seconds * 1000));
+  }
+}
+
+async function waitForUsersBucket(): Promise<void> {
+  const wait = usersBucketResetAt - Date.now();
+  if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
+}
+
+/**
  * GET /users/{id}, with the outcome kept in three kinds the callers treat differently:
  * a parsed body, a non-ok status, or an error (network failure or unreadable body).
+ * A 429 that says how long to wait (at most 5 seconds) is retried up to twice after that wait;
+ * a 429 without a usable wait is returned as a status at once.
  */
 async function fetchDiscordUserRaw(
   userId: string,
 ): Promise<{ kind: "ok"; user: DiscordUser } | { kind: "status"; status: number } | { kind: "error" }> {
   try {
-    const res = await fetch(`${DISCORD_API}/users/${userId}`, {
-      headers: { Authorization: `Bot ${env.DISCORD_API_TOKEN}` },
-    });
-    if (!res.ok) return { kind: "status", status: res.status };
-    return { kind: "ok", user: (await res.json()) as DiscordUser };
+    for (let attempt = 0; ; attempt++) {
+      await waitForUsersBucket();
+      const res = await fetch(`${DISCORD_API}/users/${userId}`, {
+        headers: { Authorization: `Bot ${env.DISCORD_API_TOKEN}` },
+      });
+      noteUsersBucket(res);
+      if (res.status === 429 && attempt < 2) {
+        const wait = await rateLimitWaitMs(res);
+        if (wait !== null) {
+          usersBucketResetAt = Math.max(usersBucketResetAt, Date.now() + wait);
+          continue;
+        }
+      }
+      if (!res.ok) return { kind: "status", status: res.status };
+      return { kind: "ok", user: (await res.json()) as DiscordUser };
+    }
   } catch {
     return { kind: "error" };
   }
