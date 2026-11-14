@@ -397,7 +397,7 @@ Nonce: n1
       {
         "inline": true,
         "name": "Author",
-        "value": "<@?>",
+        "value": "Unknown",
       },
       {
         "inline": true,
@@ -406,7 +406,7 @@ Nonce: n1
       },
       {
         "name": "Content",
-        "value": "*Content not cached*",
+        "value": "*Not cached: DragonBot only remembers messages sent since it last started (the newest 200 per channel).*",
       },
       {
         "name": "Reactions",

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { Collection, type Message } from "discord.js";
-import { buildMessageDeletedEmbed, buildRepeatSpamEmbed } from "../../src/utils/message-log.js";
+import { buildMessageDeletedEmbed, buildRepeatSpamEmbed, NOT_CACHED_CONTENT } from "../../src/utils/message-log.js";
 
 function fakeMessage(overrides: Record<string, unknown> = {}): Message {
   return {
@@ -94,8 +94,8 @@ describe("buildMessageDeletedEmbed", () => {
     const embed = buildMessageDeletedEmbed(fakeMessage({ content: null, author: null, guildId: null })).toJSON();
 
     expect(embed.author).toEqual({ name: "Unknown" });
-    expect(embed.fields![0]).toEqual({ name: "Author", value: "<@?>", inline: true });
-    expect(embed.fields![2]).toEqual({ name: "Content", value: "*Content not cached*" });
+    expect(embed.fields![0]).toEqual({ name: "Author", value: "Unknown", inline: true });
+    expect(embed.fields![2]).toEqual({ name: "Content", value: NOT_CACHED_CONTENT });
     expect(embed.fields![3]).toEqual({ name: "Reactions", value: "No reactions" });
     expect(embed.fields![4]).toEqual({ name: "Attachments", value: "No attachments" });
     expect(embed.fields![5]).toEqual({ name: "Stickers", value: "No stickers" });

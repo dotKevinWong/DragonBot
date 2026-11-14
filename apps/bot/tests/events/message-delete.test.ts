@@ -3,6 +3,7 @@ import { Collection, type EmbedBuilder, type Message } from "discord.js";
 import event from "../../src/events/message-delete.js";
 import { HoneypotService } from "../../src/services/honeypot.service.js";
 import type { BotContext } from "../../src/types/context.js";
+import { NOT_CACHED_CONTENT } from "../../src/utils/message-log.js";
 
 function fakeMessage(overrides: Record<string, unknown> = {}): Message {
   return {
@@ -117,7 +118,7 @@ describe("messageDelete event", () => {
     // With no author there is no account to look up, and nothing to crash on.
     expect(logging.sendLogEmbed).toHaveBeenCalledTimes(1);
     const embed = (logging.sendLogEmbed.mock.calls[0] as [string, EmbedBuilder])[1].toJSON();
-    expect(embed.fields!.find((f) => f.name === "Content")!.value).toBe("*Content not cached*");
+    expect(embed.fields!.find((f) => f.name === "Content")!.value).toBe(NOT_CACHED_CONTENT);
   });
 
   it("ignores deletions outside a server", async () => {
